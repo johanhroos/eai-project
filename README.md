@@ -29,3 +29,21 @@ It prints the torch/CUDA versions and GPU, then runs SDPA, `torch.compile`, and 
 
 IMPORTANT: Use `uv run --no-sync` for everything: a plain `uv run` re-syncs without the extra and replaces the CUDA build of
 torch with the default one from PyPI.
+
+## Data
+
+```bash
+scripts/download_data.sh   # 45 GB download; needs wget, unzip and ~95 GB free while running (46 GB after)
+```
+
+Downloads the 8 Replica scenes that have OpenLex3D labels (room0–2, office0–4) into `data/`. Set `DATA_DIR` to put them
+elsewhere. Rerunning resumes an interrupted download.
+
+| Path | Source | Contents |
+|---|---|---|
+| `data/vmap/<scene>/imap/{00,01}/` | [vMAP](https://github.com/kxhit/vMAP) | Two camera paths × 2000 frames: `rgb/`, `depth/` (uint16, mm), `semantic_instance/` (Replica object ID per pixel), `traj_w_c.txt` (camera-to-world 4×4 per line). Path `00` is the NICE-SLAM trajectory. |
+| `data/vmap/<scene>/habitat/info_semantic.json` | vMAP | Object ID → Replica class name |
+| `data/gt_openlex3d/replica/<scene>/` | [OpenLex3D](https://github.com/openlex3d/openlex3d) | Open-vocabulary labels and text queries per object ID |
+
+Camera: 1200×680, fx = fy = 600, cx = 599.5, cy = 339.5. Frames are numbered `0`–`1999` without zero padding, so sort
+by number. Scene names are `room_0` in vMAP and `room0` in OpenLex3D.
