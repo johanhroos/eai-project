@@ -1,0 +1,117 @@
+[project]
+name = "eai-project"
+version = "0.1.0"
+description = "DD2600 course project"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "hydra-core>=1.3.7",
+    "ipykernel>=7.3.0",
+    "jupyter>=1.1.1",
+    "jupyterlab>=4.6.4",
+    "numpy>=2.5.3",
+    "torch>=2.11.0",
+    "torchcodec>=0.11.0",
+    "torchvision>=0.26.0",
+]
+
+[project.optional-dependencies]
+cu126 = ["torch>=2.11.0", "torchvision>=0.26.0", "torchcodec>=0.12.0"]
+cu130 = ["torch>=2.11.0", "torchvision>=0.26.0", "torchcodec>=0.12.0"]
+
+[tool.uv]
+conflicts = [[{ extra = "cu126" }, { extra = "cu130" }]]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu126", extra = "cu126" },
+    { index = "pytorch-cu130", extra = "cu130" },
+]
+torchvision = [
+    { index = "pytorch-cu126", extra = "cu126" },
+    { index = "pytorch-cu130", extra = "cu130" },
+]
+torchcodec = [
+    { index = "pytorch-cu126", extra = "cu126" },
+    { index = "pytorch-cu130", extra = "cu130" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+indent-width = 4
+extend-exclude = [
+    ".ipynb_checkpoints",
+    ".pyenv",
+    ".pytest_cache",
+    ".vscode",
+    "build",
+    "site-packages",
+]
+
+[tool.ruff.format]
+indent-style = "space"
+
+[tool.ruff.lint]
+select = [
+# Pycodestyle
+"E4",    # Import and whitespace errors
+"E7",    # Statement errors
+"E9",    # Syntax and runtime errors
+"E101",  # Mixed spaces and tabs
+"E501",  # Line too long
+# Core correctness
+"F",     # Pyflakes
+"B",     # Flake8-bugbear
+"PLE",   # Serious Pylint errors
+# Imports and modernization
+"I",     # Import sorting
+"UP",    # Modern Python syntax
+"PTH",   # Prefer pathlib
+# Code quality
+"C4",    # Better comprehensions
+"RET",   # Return-statement consistency
+"RSE",   # Raise-statement cleanup
+"PIE",   # Miscellaneous unnecessary/problematic code
+"SIM",   # Simplifiable code
+"PERF",  # Common performance mistakes
+"RUF",   # Ruff-specific checks
+# Documentation
+"D",     # Pydocstyle
+
+]
+ignore = [
+# Check the style of existing docstrings without requiring docstrings
+# on every module, class, method, and function.
+"D100", # Missing module docstring
+"D101", # Missing public class docstring
+"D102", # Missing public method docstring
+"D103", # Missing public function docstring
+"D104", # Missing package docstring
+"D105", # Missing magic-method docstring
+"D106", # Missing public nested-class docstring
+"D107", # Missing init docstring
+]
+exclude = ["*.ipynb"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[dependency-groups]
+dev = [
+    "jedi-language-server>=0.47.0",
+    "jupyterlab-git>=0.54.0",
+    "jupyterlab-lsp>=5.3.0",
+    "jupyterlab-vim>=4.1.4",
+    "ruff>=0.15.18",
+]
