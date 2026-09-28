@@ -13,3 +13,4 @@ wheels/
 # Data
 /data/
 .virtual_documents/
+.ruff_cache/

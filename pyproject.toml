@@ -9,13 +9,21 @@ dependencies = [
     "ipykernel>=7.3.0",
     "jupyter>=1.1.1",
     "jupyterlab>=4.6.4",
+    "matplotlib>=3.11.2",
     "numpy>=2.5.3",
-    "rerun-sdk>=0.38.1",
+    "rerun-sdk[notebook]>=0.38.1",
     "torch>=2.11.0",
     "torchcodec>=0.11.0",
     "torchvision>=0.26.0",
     "transformers>=5.17.0",
 ]
+
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "utils"  # the code lives in src/utils
 
 [project.optional-dependencies]
 cu126 = ["torch>=2.11.0", "torchvision>=0.26.0", "torchcodec>=0.12.0"]

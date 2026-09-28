@@ -33,7 +33,7 @@ torch with the default one from PyPI.
 ## Data
 
 ```bash
-scripts/download_data.sh   # 45 GB download; needs wget, unzip and ~95 GB free while running (46 GB after)
+bash scripts/download_data.sh   # 45 GB download; needs wget, unzip and ~95 GB free while running (46 GB after)
 ```
 
 Downloads the 8 Replica scenes that have OpenLex3D labels (room0–2, office0–4) into `data/`. Set `DATA_DIR` to put them
