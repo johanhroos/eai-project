@@ -60,5 +60,3 @@ uv run --no-sync python -m models.sam3 --scene room_0 --frames 60 --prompt lamp
 
 The video tracker saves original-resolution masks, SAM track IDs, scores and boxes under `outputs/sam3_preview/`.
 The notebook displays RGB and predicted masks side by side; set `RUN_SAM = False` to inspect the existing cache.
-Reusing the output directory overwrites that run. Track IDs belong to the clip, not the persistent object graph.
-The optional `kernels` package is not included; Transformers warns and skips NMS and mask cleanup without it.
