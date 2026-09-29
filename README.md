@@ -47,3 +47,18 @@ elsewhere. Rerunning resumes an interrupted download.
 
 Camera: 1200×680, fx = fy = 600, cx = 599.5, cy = 339.5. Frames are numbered `0`–`1999` without zero padding, so sort
 by number. Scene names are `room_0` in vMAP and `room0` in OpenLex3D.
+
+## SAM 3 preview
+
+Request access to [facebook/sam3](https://huggingface.co/facebook/sam3) and authenticate on the GPU machine
+with `huggingface_hub.login()` once. Run the **SAM 3 short clip** section of `notebooks/explore_data.ipynb`
+in VS Code with the project's `.venv` kernel, or generate the same cache from the terminal:
+
+```bash
+uv run --no-sync python -m models.sam3 --scene room_0 --frames 60 --prompt lamp
+```
+
+The video tracker saves original-resolution masks, SAM track IDs, scores and boxes under `outputs/sam3_preview/`.
+The notebook displays RGB and predicted masks side by side; set `RUN_SAM = False` to inspect the existing cache.
+Reusing the output directory overwrites that run. Track IDs belong to the clip, not the persistent object graph.
+The optional `kernels` package is not included; Transformers warns and skips NMS and mask cleanup without it.
