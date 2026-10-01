@@ -10,9 +10,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+import pycocotools.mask as mask_utils
 import rerun as rr
 import rerun.blueprint as rrb
 from PIL import Image
+
+from utils.schema import Masks, Run
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.environ.get("DATA_DIR", REPO_ROOT / "data"))
@@ -57,6 +60,48 @@ def load_objects(scene: str) -> dict[int, ReplicaObject]:
         for sample in json.load(f)["dataset"]["samples"]:
             objects[sample["object_id"]].labels = sample["labels"]["image_attributes"]
     return objects
+
+
+def parse_source(source: str) -> tuple[str, str]:
+    """Scene and sequence of a Run.source such as "replica/room_0/00"."""
+    dataset, scene, seq = source.split("/")
+    if dataset != "replica" or scene not in SCENES or seq not in ("00", "01"):
+        raise ValueError(f"not a Replica source: {source!r}")
+    return scene, seq
+
+
+def gt_masks(run: Run) -> tuple[Masks, list[str]]:
+    """Ground-truth instance masks for every stride-th frame, in the same format SAM 3 produces, plus their vocab.
+
+    One row per object visible in a frame. sam_id is the Replica object ID, prompt indexes the vocab (the scene's
+    Replica class names, sorted) and score is 1. Pixels whose ID is missing from info_semantic.json are skipped.
+    """
+    scene, seq = parse_source(run.source)
+    objects = load_objects(scene)
+    vocab = sorted({o.class_name for o in objects.values()})
+    prompt_of = {o.id: vocab.index(o.class_name) for o in objects.values()}
+
+    frame, prompt, sam_id, rle = [], [], [], []
+    for i in range(0, N_FRAMES, run.stride):
+        ids = _load_png(sequence_dir(scene, seq) / "semantic_instance" / f"semantic_instance_{i}.png")
+        visible = [j for j in np.unique(ids).tolist() if j in prompt_of]
+        if not visible:
+            continue
+        # pycocotools wants a Fortran-ordered (H, W, N) uint8 stack
+        stack = (ids[:, :, None] == np.array(visible, dtype=ids.dtype)).astype(np.uint8, order="F")
+        rle += [{"size": r["size"], "counts": r["counts"].decode("ascii")} for r in mask_utils.encode(stack)]
+        frame += [i] * len(visible)
+        prompt += [prompt_of[j] for j in visible]
+        sam_id += visible
+
+    masks = Masks(
+        frame=np.array(frame, dtype=np.int32),
+        prompt=np.array(prompt, dtype=np.int16),
+        sam_id=np.array(sam_id, dtype=np.int32),
+        score=np.ones(len(frame), dtype=np.float32),
+        rle=rle,
+    )
+    return masks, vocab
 
 
 def log_to_rerun(scene: str, seq: str = "00", step: int = 20) -> None:
