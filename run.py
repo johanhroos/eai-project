@@ -4,7 +4,7 @@ import argparse
 
 from models import sam
 from utils import replica
-from utils.schema import Run
+from utils.schema import Run, save_stage
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument(
@@ -23,7 +23,23 @@ if args.stride < 1:
 
 for source in args.source:
     run = Run(source=source, stride=args.stride, mask_source=args.mask_source, pose_source=args.pose_source)
+    if run.done("masks") and not args.overwrite:
+        print(f"Skipping {run.source}: {run.stage_dir('masks')} exists")
+        continue
+
     if run.mask_source == "gt":
-        replica.save_gt_masks(run, args.overwrite)
+        masks, vocab = replica.gt_masks(run)
+        metadata = {"vocab": vocab}
     else:
-        sam.save_masks(run, args.overwrite)
+        frames, numbers = replica.load_run_rgb(run)
+        vocab = replica.prompt_vocab(run)
+        processor, model = sam.load_model()
+        masks = sam.segment(frames, numbers, vocab, processor, model)
+        metadata = {
+            "vocab": vocab,
+            "model": sam.MODEL_ID,
+            "score_threshold_detection": model.config.score_threshold_detection,
+            "new_det_thresh": model.config.new_det_thresh,
+        }
+    save_stage(run.stage_dir("masks"), masks, metadata)
+    print(f"Saved {len(masks.frame)} masks to {run.stage_dir('masks')}")

@@ -1,0 +1,33 @@
+{
+  "vocab": [
+    "anonymize_picture",
+    "anonymize_text",
+    "bin",
+    "blinds",
+    "camera",
+    "ceiling",
+    "chair",
+    "clock",
+    "desk-organizer",
+    "door",
+    "floor",
+    "indoor-plant",
+    "lamp",
+    "other-leaf",
+    "panel",
+    "pillar",
+    "plant-stand",
+    "rug",
+    "sofa",
+    "switch",
+    "table",
+    "tablet",
+    "tissue-paper",
+    "tv-screen",
+    "undefined",
+    "vent",
+    "wall",
+    "wall-plug"
+  ],
+  "n_rows": 1768
+}

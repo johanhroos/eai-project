@@ -14,7 +14,7 @@ import rerun.blueprint as rrb
 from PIL import Image
 
 from utils.config import DATA_DIR, ROOT_DIR
-from utils.schema import Masks, Run, encode_rle, save_stage
+from utils.schema import Masks, Run, encode_rle
 
 REPO_ROOT = ROOT_DIR
 SCENES = ["room_0", "room_1", "room_2", "office_0", "office_1", "office_2", "office_3", "office_4"]
@@ -138,18 +138,6 @@ def gt_masks(run: Run) -> tuple[Masks, list[str]]:
         rle=rle,
     )
     return masks, vocab
-
-
-def save_gt_masks(run: Run, overwrite: bool = False) -> None:
-    """Cache the ground-truth masks of a run as its masks stage, unless already cached."""
-    if run.mask_source != "gt":
-        raise ValueError(f"run has mask_source {run.mask_source!r}, not 'gt'")
-    if run.done("masks") and not overwrite:
-        print(f"Skipping {run.source}: {run.stage_dir('masks')} exists")
-        return
-    masks, vocab = gt_masks(run)
-    save_stage(run.stage_dir("masks"), masks, {"vocab": vocab})
-    print(f"Saved {len(masks.frame)} masks to {run.stage_dir('masks')}")
 
 
 def log_to_rerun(scene: str, seq: str = "00", step: int = 20) -> None:

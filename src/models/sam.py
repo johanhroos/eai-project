@@ -1,9 +1,5 @@
-"""Extract masks from a video with SAM 3, prompted by the classes you want to segment.
+"""Extract masks from a video with SAM 3, prompted by the classes you want to segment."""
 
-Run it as a script to cache the SAM 3 masks of Replica runs: python -m models.sam --source replica/room_0/00
-"""
-
-import argparse
 from functools import cache
 
 import numpy as np
@@ -11,8 +7,7 @@ import pycocotools.mask as mask_utils
 import torch
 from transformers import Sam3VideoModel, Sam3VideoProcessor
 
-from utils import replica
-from utils.schema import Masks, Run, encode_rle, save_stage
+from utils.schema import Masks, encode_rle
 
 MODEL_ID = "facebook/sam3"
 
@@ -37,7 +32,8 @@ def segment(
 
     frames are RGB (H, W, 3) uint8 in temporal order, and Masks.frame holds frame_numbers[i] for frames[i].
     Masks.prompt indexes prompts. SAM 3 keeps the masks of one prompt apart, but masks of different prompts can overlap.
-    The whole clip stays in CPU memory during tracking.
+    The whole clip and the tracker state stay in CPU memory during tracking. The tracker keeps every frame's masks and
+    features for every object, so on the GPU it outgrew 32 GB at 100 frames; on the CPU it costs about 40% speed.
     """
     if len(frames) != len(frame_numbers):
         raise ValueError(f"got {len(frames)} frames but {len(frame_numbers)} frame numbers")
@@ -47,6 +43,7 @@ def segment(
     inference_session = processor.init_video_session(
         video=frames,
         inference_device="cuda",
+        inference_state_device="cpu",
         processing_device="cpu",
         video_storage_device="cpu",
         dtype=torch.bfloat16,
@@ -86,47 +83,3 @@ def mask_boxes(rle: list[dict]) -> np.ndarray:
     # toBbox gives COCO (x, y, w, h) with integer values, and a flat array when rle is empty
     xywh = mask_utils.toBbox(rle).reshape(-1, 4).astype(np.int32)
     return np.concatenate([xywh[:, :2], xywh[:, :2] + xywh[:, 2:]], axis=1)
-
-
-def save_masks(run: Run, overwrite: bool = False) -> None:
-    """Compute and cache the SAM 3 masks of a Replica run, prompted with its scene's classes, unless already cached."""
-    if run.mask_source != "sam3":
-        raise ValueError(f"run has mask_source {run.mask_source!r}, not 'sam3'")
-    if run.done("masks") and not overwrite:
-        print(f"Skipping {run.source}: {run.stage_dir('masks')} exists")
-        return
-
-    frames, numbers = replica.load_run_rgb(run)
-    vocab = replica.prompt_vocab(run)
-    processor, model = load_model()
-    masks = segment(frames, numbers, vocab, processor, model)
-    metadata = {
-        "vocab": vocab,
-        "model": MODEL_ID,
-        "score_threshold_detection": model.config.score_threshold_detection,
-        "new_det_thresh": model.config.new_det_thresh,
-    }
-    save_stage(run.stage_dir("masks"), masks, metadata)
-    print(f"Saved {len(masks.frame)} masks to {run.stage_dir('masks')}")
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--source",
-        nargs="+",
-        default=[f"replica/{scene}/00" for scene in replica.SCENES],
-        help="runs to compute, such as replica/room_0/00 (default: every scene's sequence 00)",
-    )
-    parser.add_argument("--stride", type=int, default=20)
-    parser.add_argument("--overwrite", action="store_true", help="recompute runs that are already cached")
-    args = parser.parse_args()
-    if args.stride < 1:
-        parser.error("stride must be positive")
-    for source in args.source:
-        # The masks stage doesn't depend on poses
-        save_masks(Run(source=source, stride=args.stride, mask_source="sam3", pose_source="gt"), args.overwrite)
-
-
-if __name__ == "__main__":
-    main()
