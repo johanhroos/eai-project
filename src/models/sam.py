@@ -7,6 +7,7 @@ import argparse
 from functools import cache
 
 import numpy as np
+import pycocotools.mask as mask_utils
 import torch
 from transformers import Sam3VideoModel, Sam3VideoProcessor
 
@@ -75,6 +76,16 @@ def segment(
         score=np.array(score, dtype=np.float32),
         rle=rle,
     )
+
+
+def mask_boxes(rle: list[dict]) -> np.ndarray:
+    """(N, 4) int32 bounding boxes (x0, y0, x1, y1) of Masks.rle rows, so image[y0:y1, x0:x1] crops mask i.
+
+    An empty mask gets the box (0, 0, 0, 0), so check x1 > x0 before cropping.
+    """
+    # toBbox gives COCO (x, y, w, h) with integer values, and a flat array when rle is empty
+    xywh = mask_utils.toBbox(rle).reshape(-1, 4).astype(np.int32)
+    return np.concatenate([xywh[:, :2], xywh[:, :2] + xywh[:, 2:]], axis=1)
 
 
 def save_masks(run: Run, overwrite: bool = False) -> None:
