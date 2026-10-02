@@ -1,3 +1,56 @@
 Patch tokens:
 
+    RGB → DINO → patch tokens
+                      +
+                  SAM mask
+                      ↓
+                 mask pooling
+                      ↓
+              object descriptor
+
+CLS token whole image feature:
+
+
+    RGB image → DINOv3 → CLS token
+                             ↓
+                  image descriptor [D]
+
+CLS per object:
+
+    RGB image + SAM masks
+              ↓
+          object crops
+              ↓
+           DINOv3
+              ↓
+          CLS tokens
+              ↓
+    object descriptors [N, D]
+
+Register tokens:
+
+    RGB image → DINOv3 → register tokens
+                             ↓
+                  register features [R, D]
+
+
+
+Bounding box
  
+RGB frame
+   │
+   └──→ SAM
+          ↓
+     object masks
+          ↓
+   bounding box per mask
+          ↓
+    crop RGB image
+          ↓
+        DINOv3
+          ↓
+   DINO features/tokens
+          ↓
+   object descriptor
+          ↓
+one vector per object [N, D]

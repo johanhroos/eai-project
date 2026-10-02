@@ -1,0 +1,52 @@
+RGB frame + Depth + GT camera pose
+        │
+        ├───────────────────────────────┐
+        │                               │
+        ↓                               ↓
+       SAM                            DINOv3
+        ↓                               ↓
+   object masks                    patch features
+        │                               │
+        └──────────────┬────────────────┘
+                       ↓
+                  mask pooling
+                       ↓
+               DINO descriptors
+                       │
+                       │
+RGB frame + masks      │
+        ↓              │
+      SigLIP           │
+        ↓              │
+ SigLIP descriptors    │
+        │              │
+        └──────┬───────┘
+               │
+               │
+masks + depth + GT pose
+        ↓
+     geometry
+        ↓
+3D position / 3D bounding box
+        │
+        │
+        └──────────┐
+                   ↓
+              Object detection
+                   │
+        ┌──────────┼───────────┐
+        ↓          ↓           ↓
+   DINO desc.  SigLIP desc.  3D info
+        └──────────┼───────────┘
+                   ↓
+          matching across frames
+                   ↓
+          same object or new?
+                   ↓
+              object graph
+                   ↓
+        ┌──────────┴──────────┐
+        ↓                     ↓
+    object nodes         spatial edges
+        ↓
+ persistent world representation
