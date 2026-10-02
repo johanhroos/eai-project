@@ -3,6 +3,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 import numpy as np
+import pycocotools.mask as mask_utils
 
 from utils.config import OUTPUT_DIR, STAGE_KEYS
 
@@ -67,7 +68,14 @@ class Masks:
         if len(self.rle) != n:
             raise ValueError(f"rle: got {len(self.rle)} rows, expected {n}")
         if self.rle and not isinstance(self.rle[0]["counts"], str):
-            raise TypeError("rle counts must be str: call .decode('ascii') after mask_utils.encode in sam3.py")
+            raise TypeError("rle counts must be str: build rle with encode_rle")
+
+
+def encode_rle(masks: np.ndarray) -> list[dict]:
+    """Masks.rle rows for a (N, H, W) bool stack of masks."""
+    # pycocotools wants a Fortran-ordered (H, W, N) uint8 stack and returns counts as bytes, which JSON can't hold
+    rles = mask_utils.encode(masks.transpose(1, 2, 0).astype(np.uint8, order="F"))
+    return [{"size": r["size"], "counts": r["counts"].decode("ascii")} for r in rles]
 
 
 def check_aligned(run: Run, stage: str) -> None:
