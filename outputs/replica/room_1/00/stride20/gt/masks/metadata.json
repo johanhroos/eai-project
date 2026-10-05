@@ -1,0 +1,30 @@
+{
+  "vocab": [
+    "basket",
+    "bed",
+    "blanket",
+    "blinds",
+    "book",
+    "cabinet",
+    "ceiling",
+    "comforter",
+    "door",
+    "floor",
+    "indoor-plant",
+    "lamp",
+    "nightstand",
+    "panel",
+    "picture",
+    "pillow",
+    "plate",
+    "rug",
+    "switch",
+    "undefined",
+    "vase",
+    "vent",
+    "wall",
+    "wall-plug",
+    "window"
+  ],
+  "n_rows": 1963
+}

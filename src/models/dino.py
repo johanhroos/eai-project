@@ -2,7 +2,16 @@ import torch
 from transformers import AutoModel, AutoImageProcessor
 from utils import replica
 
-
+# Usage:
+# 1. Create a DINOEncoder with the desired DINO model.
+# 2. Load an RGB image as a NumPy array.
+# 3. Pass the image to encode().
+# 4. encode() returns a 1D DINO feature embedding for the image.
+#
+# Example:
+#   dino = DINOEncoder("facebook/dinov3-vitl16-pretrain-lvd1689m")
+#   embedding = dino.encode(rgb)
+#   print(embedding.shape)
 
 class DINOEncoder:
     def __init__(self, model_name, device="cuda"):

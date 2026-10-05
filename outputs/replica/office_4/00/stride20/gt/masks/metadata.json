@@ -1,0 +1,25 @@
+{
+  "vocab": [
+    "anonymize_picture",
+    "anonymize_text",
+    "bench",
+    "bin",
+    "camera",
+    "ceiling",
+    "chair",
+    "clock",
+    "door",
+    "floor",
+    "lamp",
+    "non-plane",
+    "panel",
+    "table",
+    "tv-screen",
+    "undefined",
+    "vent",
+    "wall",
+    "wall-plug",
+    "window"
+  ],
+  "n_rows": 1857
+}

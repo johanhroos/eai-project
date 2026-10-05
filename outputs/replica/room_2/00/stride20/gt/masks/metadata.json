@@ -1,0 +1,28 @@
+{
+  "vocab": [
+    "anonymize_picture",
+    "blinds",
+    "bottle",
+    "bowl",
+    "box",
+    "ceiling",
+    "chair",
+    "door",
+    "floor",
+    "indoor-plant",
+    "lamp",
+    "plate",
+    "rug",
+    "sculpture",
+    "shelf",
+    "switch",
+    "table",
+    "undefined",
+    "vase",
+    "vent",
+    "wall",
+    "wall-plug",
+    "window"
+  ],
+  "n_rows": 2421
+}

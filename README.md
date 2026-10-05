@@ -10,6 +10,7 @@ Requires [uv](https://docs.astral.sh/uv/) and FFmpeg (used by torchcodec for vid
 git clone https://github.com/johanhroos/eai-project.git
 cd eai-project
 uv sync --extra cu126   # or for blackwell: uv sync --extra cu130
+uv run --no-sync python -m ipykernel install --user --name eai-project --display-name "EAI project"
 ```
 
 Pick the extra that matches the GPU:
@@ -32,12 +33,13 @@ torch with the default one from PyPI.
 
 ## Data
 
+Approx 46GB file.
 ```bash
-bash scripts/download_data.sh   # 45 GB download; needs wget, unzip and ~95 GB free while running (46 GB after)
+bash scripts/download_data.sh
 ```
 
-Downloads the 8 Replica scenes that have OpenLex3D labels (room0–2, office0–4) into `data/`. Set `DATA_DIR` to put them
-elsewhere. Rerunning resumes an interrupted download.
+Downloads the 8 Replica scenes that have OpenLex3D labels (room0–2, office0–4) into `data/`. Rerunning resumes an interrupted
+download.
 
 | Path | Source | Contents |
 |---|---|---|
@@ -51,12 +53,11 @@ by number. Scene names are `room_0` in vMAP and `room0` in OpenLex3D.
 ## SAM 3 preview
 
 Request access to [facebook/sam3](https://huggingface.co/facebook/sam3) and authenticate on the GPU machine
-with `huggingface_hub.login()` once. Run the **SAM 3 short clip** section of `notebooks/explore_data.ipynb`
-in VS Code with the project's `.venv` kernel, or generate the same cache from the terminal:
+with HuggingFace in terminal once.
 
 ```bash
-uv run --no-sync python -m models.sam3 --scene room_0 --frames 60 --prompt lamp
+uv run --no-sync hf auth login
 ```
 
-The video tracker saves original-resolution masks, SAM track IDs, scores and boxes under `outputs/sam3_preview/`.
-The notebook displays RGB and predicted masks side by side; set `RUN_SAM = False` to inspect the existing cache.
+Try running the cells in `notebooks/explore_data.ipynb`
+with the `EAI project` kernel.

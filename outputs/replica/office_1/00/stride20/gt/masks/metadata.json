@@ -1,0 +1,30 @@
+{
+  "vocab": [
+    "anonymize_text",
+    "bin",
+    "blanket",
+    "blinds",
+    "bottle",
+    "ceiling",
+    "chair",
+    "cloth",
+    "desk",
+    "desk-organizer",
+    "door",
+    "floor",
+    "lamp",
+    "monitor",
+    "other-leaf",
+    "panel",
+    "pillar",
+    "pillow",
+    "switch",
+    "table",
+    "tissue-paper",
+    "undefined",
+    "vent",
+    "wall",
+    "wall-plug"
+  ],
+  "n_rows": 1475
+}
