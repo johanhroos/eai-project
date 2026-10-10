@@ -85,6 +85,54 @@ def check_aligned(run: Run, stage: str) -> None:
     if n != n_masks:
         raise ValueError(f"{stage} has {n} rows, masks has {n_masks}")
 
+@dataclass
+class Events:
+    """Ground-truth hide and revisit events, one row per event, in frame order. Not aligned with the masks."""
+
+    object_id: np.ndarray  # (E,) int32, Replica object ID
+    frame: np.ndarray  # (E,) int32, frame number: last visible frame (hidden) or first visible frame (revisited)
+    kind: np.ndarray  # (E,) int8, 0 = hidden, 1 = revisited
+    gap: np.ndarray  # (E,) int32, frames hidden before the revisit (0 for hidden events)
+
+    def __post_init__(self):
+        n = len(self.object_id)
+        _check("object_id", self.object_id, np.int32, (n,))
+        _check("frame", self.frame, np.int32, (n,))
+        _check("kind", self.kind, np.int8, (n,))
+        _check("gap", self.gap, np.int32, (n,))
+
+@dataclass
+class Boxes:
+    """3D box of every mask: row i belongs to mask i of the masks stage. World frame, metres, axis-aligned.
+
+    box_min and box_max are NaN (and n_points 0) where a mask has too little valid depth.
+    """
+
+    box_min: np.ndarray  # (N, 3) float32
+    box_max: np.ndarray  # (N, 3) float32
+    n_points: np.ndarray  # (N,) int32, depth points left after outlier removal
+
+    def __post_init__(self):
+        n = len(self.box_min)
+        _check("box_min", self.box_min, np.float32, (n, 3))
+        _check("box_max", self.box_max, np.float32, (n, 3))
+        _check("n_points", self.n_points, np.int32, (n,))
+
+@dataclass
+class ObjectBoxes:
+    """Ground-truth 3D box of each object, fused over all frames. Not aligned with the masks."""
+
+    object_id: np.ndarray  # (M,) int32, Replica object ID
+    box_min: np.ndarray  # (M, 3) float32
+    box_max: np.ndarray  # (M, 3) float32
+    n_points: np.ndarray  # (M,) int32
+
+    def __post_init__(self):
+        n = len(self.object_id)
+        _check("object_id", self.object_id, np.int32, (n,))
+        _check("box_min", self.box_min, np.float32, (n, 3))
+        _check("box_max", self.box_max, np.float32, (n, 3))
+        _check("n_points", self.n_points, np.int32, (n,))
 
 def save_stage(stage_dir: Path, data, metadata: dict) -> None:
     """General function to cache data e.g. SAM masks or DINO features."""
