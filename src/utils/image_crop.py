@@ -1,4 +1,7 @@
+
 """Utilities for cropping objects from images."""
+
+import math
 
 
 def pad_bbox(bbox, image_shape, padding=0.1):
@@ -12,10 +15,10 @@ def pad_bbox(bbox, image_shape, padding=0.1):
     pad_x = bbox_width * padding
     pad_y = bbox_height * padding
 
-    x1 = max(0, int(x1 - pad_x))
-    y1 = max(0, int(y1 - pad_y))
-    x2 = min(width, int(x2 + pad_x))
-    y2 = min(height, int(y2 + pad_y))
+    x1 = max(0, math.floor(x1 - pad_x))
+    y1 = max(0, math.floor(y1 - pad_y))
+    x2 = min(width, math.ceil(x2 + pad_x))
+    y2 = min(height, math.ceil(y2 + pad_y))
 
     return x1, y1, x2, y2
 
@@ -28,4 +31,12 @@ def crop_bbox(image, bbox, padding=0.1):
 
 def crop_bboxes(image, bboxes, padding=0.1):
     """Crop multiple padded bounding boxes."""
-    return [crop_bbox(image, bbox, padding) for bbox in bboxes]
+
+    crops = []
+
+    for sam_bbox in bboxes:
+        x1, y1, x2, y2 = sam_bbox
+        bbox = (x1, y1, x2 + 1, y2 + 1)
+        crops.append(crop_bbox(image, bbox, padding))
+    
+    return crops
