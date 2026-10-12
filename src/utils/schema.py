@@ -98,7 +98,11 @@ def check_aligned(run: Run, stage: str) -> None:
 
 @dataclass
 class Graph:
-    """Object node of every mask: row i belongs to mask i of the masks stage. All masks of a SAM track share a node."""
+    """Persistent node of every mask, row-aligned with masks.
+
+    Batch graph.build assigns whole SAM tracks; incremental association may split
+    a drifting SAM track. Prefix visualization uses -1 for unprocessed rows.
+    """
 
     node: np.ndarray  # (N,) int32, node ID: 0, 1, ... in order of first appearance
 
@@ -230,3 +234,39 @@ def load_stage[T](stage_dir: Path, stage_class: type[T]) -> T:
         arrays = {k: f[k] for k in f.files}
     other = json.loads((stage_dir / "other.json").read_text())
     return stage_class(**arrays, **other)
+
+
+@dataclass
+class PersistentObjects:
+    """Compact memory snapshot; no masks, images or dense scene points required."""
+
+    object_id: np.ndarray
+    box_min: np.ndarray
+    box_max: np.ndarray
+    n_points: np.ndarray
+    dino: np.ndarray
+    siglip: np.ndarray
+    siglip_sum: np.ndarray
+    siglip_count: np.ndarray
+    first_seen: np.ndarray
+    last_seen: np.ndarray
+    observation_count: np.ndarray
+    labels: list[str | None]
+    config: dict
+    next_id: int
+    last_frame: int | None
+
+    def __post_init__(self):
+        n = len(self.object_id)
+        _check("object_id", self.object_id, np.int32, (n,))
+        for name in ("box_min", "box_max"):
+            _check(name, getattr(self, name), np.float32, (n, 3))
+        for name in ("n_points", "siglip_count", "first_seen", "last_seen", "observation_count"):
+            _check(name, getattr(self, name), np.int64, (n,))
+        for name in ("dino", "siglip"):
+            _check(name, getattr(self, name), np.float16, (n, None, None))
+        _check("siglip_sum", self.siglip_sum, np.float32, (n, self.siglip.shape[2]))
+        if len(self.labels) != n or len(np.unique(self.object_id)) != n:
+            raise ValueError("invalid persistent node IDs or labels")
+        if n and self.next_id <= int(self.object_id.max()):
+            raise ValueError("next_id must exceed every stored ID")
