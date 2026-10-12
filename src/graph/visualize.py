@@ -146,7 +146,7 @@ def scores_figure(matches):
         "SAM IDs",
         "Decision",
         "DINO",
-        "IoU",
+        "Inside",
         "Center",
         "Geometry",
         "Score",
@@ -163,7 +163,7 @@ def scores_figure(matches):
         ]
         row += [
             "—" if key not in scores else f"{scores[key]:.3f}"
-            for key in ("dino", "iou", "center", "geometry", "score")
+            for key in ("dino", "inside", "center", "geometry", "score")
         ]
         for column, value in zip(values, row, strict=True):
             column.append(value)
@@ -257,7 +257,7 @@ class GraphExplorer:
             "threshold": slider("Threshold", c.threshold),
             "max_descriptors": widgets.IntSlider(description="Bank size", value=c.max_descriptors, min=1, max=16),
             "max_candidate_distance": slider("Gate (m)", c.max_candidate_distance or 1.5, low=0.05, high=5, step=0.05),
-            "geometry_iou_weight": slider("IoU share", c.geometry_iou_weight),
+            "geometry_inside_weight": slider("Inside share", c.geometry_inside_weight),
             "center_distance_scale": slider("Center (m)", c.center_distance_scale, low=0.05, high=3, step=0.05),
             "enable_dino": widgets.Checkbox(description="Use DINO", value=c.enable_dino),
             "enable_geometry": widgets.Checkbox(description="Use geometry", value=c.enable_geometry),

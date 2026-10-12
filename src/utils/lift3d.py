@@ -204,6 +204,17 @@ def box_iou_3d(a: Box3D, b: Box3D) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def box_containment(a: Box3D, b: Box3D) -> float:
+    """Share of the smaller box's volume inside the larger: 1 for a view of part of an object inside the object's box.
+
+    IoU is near 0 there, since it divides by the larger box too. 0 when the boxes don't touch or one has no volume.
+    """
+    lo, hi = np.maximum(a.min, b.min), np.minimum(a.max, b.max)
+    inter = float(np.prod(np.maximum(hi - lo, 0)))
+    smaller = min(a.volume, b.volume)
+    return inter / smaller if smaller > 0 else 0.0
+
+
 # EVENTS: keep track of objects when they leave and re-appear in the scene
 
 # Thresholds in raw frames, so they do not change with the run's stride

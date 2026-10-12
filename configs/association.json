@@ -6,7 +6,7 @@
   "threshold": 0.55,
   "max_descriptors": 4,
   "max_candidate_distance": 1.0,
-  "geometry_iou_weight": 0.5,
+  "geometry_inside_weight": 0.5,
   "center_distance_scale": 0.5,
   "descriptor_duplicate_similarity": 0.95,
   "require_same_label": false,
