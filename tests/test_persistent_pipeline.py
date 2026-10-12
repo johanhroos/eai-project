@@ -78,7 +78,7 @@ class PipelineTests(unittest.TestCase):
             AssociationConfig(
                 dino_weight=0,
                 box_weight=1,
-                geometry_iou_weight=0,
+                geometry_inside_weight=0,
                 threshold=0.5,
                 center_distance_scale=1,
             )

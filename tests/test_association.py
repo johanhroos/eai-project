@@ -98,6 +98,16 @@ class AssociationTests(unittest.TestCase):
         np.testing.assert_array_equal(memory.nodes[object_id].box.min, [0, 0, 0])
         np.testing.assert_array_equal(memory.nodes[object_id].box.max, [1.5, 1, 1])
 
+    def test_partial_view_inside_the_box_counts_as_the_same_place(self):
+        memory = ObjectMemory()
+        object_id = memory.associate_frame(0, [observation()])[0]
+        memory.associate_frame(1, [observation(x=0.5)])  # the box is now 1.5 m long
+        part = observation(x=0.2)
+        part.box = Box3D(np.array([0.2, 0.2, 0.2]), np.array([0.4, 0.4, 0.4]), 100)  # a small part, inside the box
+        parts = memory.components(part, memory.nodes[object_id])
+        self.assertEqual(parts["inside"], 1)
+        self.assertEqual(memory.associate_frame(2, [part])[0], object_id)
+
     def test_strict_threshold_and_frame_order(self):
         memory = ObjectMemory(AssociationConfig(threshold=1))
         first = memory.associate_frame(0, [observation()])[0]

@@ -86,10 +86,11 @@ The graph stage (`graph/pipeline.py`, `graph/association.py`) builds an object m
 
 1. Masks of one frame that overlap strongly (mask IoU >= 0.6) are one observation: one object found by several prompts.
 2. Each observation is scored against every object in memory with its **DINO appearance** and its **location**:
-   the best DINO cosine against the object's few stored descriptors, and the overlap and centre distance of the 3D
-   boxes. Objects more than 1 m away aren't candidates. It joins the best object if the score is above the threshold,
-   and otherwise becomes a new object. SAM IDs and labels don't decide it: two SAM IDs on one object end up in one
-   node when DINO and location agree, and an object that leaves the view and comes back keeps its node.
+   the best DINO cosine against the object's few stored descriptors, and how much of one 3D box lies inside the other
+   and how close their centres are. Objects more than 1 m away aren't candidates. It joins the best object if the
+   score is above the threshold, and otherwise becomes a new object. SAM IDs and labels don't decide it: two SAM IDs
+   on one object end up in one node when DINO and location agree, and an object that leaves the view and comes back
+   keeps its node.
 3. The object's **box grows to the union** of every box it was matched with (the smallest minimum and largest maximum
    per axis), so it covers the whole space the object fills, also the parts hidden in some views. It never shrinks.
    It keeps up to four DINO descriptors from different views, and sums its observations' SigLIP embeddings for text
@@ -254,8 +255,10 @@ uv run --no-sync python -m utils.video --source replica/room_0/00 --panels track
 
 `configs/association.json` holds every matching parameter. Weights are normalised over the enabled cues
 (`enable_dino`, `enable_geometry`), and a missing cue scores zero without redistributing its weight. Geometry is
-`geometry_iou_weight * IoU + (1 - geometry_iou_weight) * exp(-centre distance / center_distance_scale)` with the
-unpadded `lift3d.box_iou_3d`. A match needs a score strictly above the threshold; in each frame the strongest pairs
+`geometry_inside_weight * inside + (1 - geometry_inside_weight) * exp(-centre distance / center_distance_scale)`, where
+inside is the share of the smaller box inside the larger (`lift3d.box_containment`). Not IoU: a view of part of an
+object lies inside the object's box, which has grown to all its views, so IoU would score it near 0 and split the
+object into many nodes. A match needs a score strictly above the threshold; in each frame the strongest pairs
 are assigned first, one observation per object. `require_same_label` adds a same-label rule, off by default since
 prompt labels change between views.
 

@@ -1,7 +1,10 @@
 """Incremental static-object association in a shared metric world frame.
 
 Whether an observation is an object already in memory is decided by its DINO appearance and its location only: SAM
-IDs and labels don't decide it. The DINO cosine is clipped to [0, 1] and geometry is in [0, 1]. Enabled nonnegative
+IDs and labels don't decide it. The DINO cosine is clipped to [0, 1] and geometry is in [0, 1]: how much of the smaller
+box lies inside the other (lift3d.box_containment), and how close the centres are. Containment rather than IoU, since
+a view of part of an object lies inside the object's box, which has grown to all its views, and IoU would score it
+near 0. Enabled nonnegative
 weights are normalized once. Missing cues score zero with no per-pair weight renormalization, so a match with less
 evidence cannot inflate its score.
 
@@ -16,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from utils.lift3d import Box3D, box_iou_3d
+from utils.lift3d import Box3D, box_containment
 
 
 @dataclass(frozen=True)
@@ -28,7 +31,7 @@ class AssociationConfig:
     threshold: float = 0.55  # above each weight alone (0.53, 0.47): DINO and location must both agree
     max_descriptors: int = 4
     max_candidate_distance: float | None = 1.0  # metres between box centres; None disables gate
-    geometry_iou_weight: float = 0.5  # 1 = IoU only; 0 = centre distance only
+    geometry_inside_weight: float = 0.5  # 1 = containment only; 0 = centre distance only
     center_distance_scale: float = 0.5  # metres; similarity exp(-distance / scale)
     descriptor_duplicate_similarity: float = 0.95
     require_same_label: bool = False
@@ -42,7 +45,7 @@ class AssociationConfig:
             raise ValueError("at least one enabled component must have positive weight")
         for value in (
             self.threshold,
-            self.geometry_iou_weight,
+            self.geometry_inside_weight,
             self.descriptor_duplicate_similarity,
             self.duplicate_iou,
         ):
@@ -187,7 +190,7 @@ class ObjectMemory:
         compatible = not (c.require_same_label and observation.label and node.label and observation.label != node.label)
         empty = {
             "dino": 0.0,
-            "iou": 0.0,
+            "inside": 0.0,
             "center": 0.0,
             "distance": None,
             "geometry": 0.0,
@@ -197,21 +200,22 @@ class ObjectMemory:
         if not compatible:
             return empty
         distance = None
-        iou = center = 0.0
+        inside = center = 0.0
         if valid_box(observation.box) and valid_box(node.box):
             distance = float(np.linalg.norm(observation.box.center - node.box.center))
             if c.max_candidate_distance is not None and distance > c.max_candidate_distance:
                 return {**empty, "distance": distance}
-            iou = float(box_iou_3d(observation.box, node.box))
-            iou = float(np.clip(iou, 0, 1)) if np.isfinite(iou) else 0.0
+            inside = float(box_containment(observation.box, node.box))
+            inside = float(np.clip(inside, 0, 1)) if np.isfinite(inside) else 0.0
             center = float(np.exp(-distance / c.center_distance_scale))
         dino = prototype_similarity(observation.dino, node.descriptors) if c.enable_dino else 0.0
-        geometry = (c.geometry_iou_weight * iou + (1 - c.geometry_iou_weight) * center) if c.enable_geometry else 0.0
+        w = c.geometry_inside_weight
+        geometry = w * inside + (1 - w) * center if c.enable_geometry else 0.0
         wd, wg = self.weights
         score = float(wd * dino + wg * geometry)
         return {
             "dino": dino,
-            "iou": iou,
+            "inside": inside,
             "center": center,
             "distance": distance,
             "geometry": geometry,
