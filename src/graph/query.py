@@ -11,6 +11,30 @@ import numpy as np
 from utils.schema import Masks, TextAligned
 
 
+def memory_embeddings(memory):
+    """Text-retrieval descriptors directly from the compact saved memory."""
+    nodes = [n for n in memory.nodes.values() if n.siglip is not None]
+    ids = np.array([n.id for n in nodes], np.int32)
+    dimension = memory.siglip_dimension or 0
+    embeddings = np.stack([n.siglip for n in nodes]) if nodes else np.empty((0, dimension), np.float32)
+    return ids, embeddings
+
+
+def nearest(memory, position, top=5):
+    """Nearest valid object boxes to a world position, as (ID, distance) pairs."""
+    from graph.association import valid_box
+
+    point = np.asarray(position, np.float32)
+    if point.shape != (3,) or not np.isfinite(point).all():
+        raise ValueError("position must be a finite world-coordinate 3-vector")
+    distances = []
+    for node in memory.nodes.values():
+        if valid_box(node.box):
+            gap = np.maximum(np.maximum(node.box.min - point, point - node.box.max), 0)
+            distances.append((node.id, float(np.linalg.norm(gap))))
+    return sorted(distances, key=lambda item: (item[1], item[0]))[:top]
+
+
 def object_embeddings(masks: Masks, emb: TextAligned, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """The distinct object IDs in ids and their (M, D) L2-normalized embeddings, the mean over each one's masks.
 
@@ -38,12 +62,14 @@ if __name__ == "__main__":
     import json
 
     from graph.node import build_nodes
+    from graph.pipeline import load_memory
     from models import siglip
     from utils import footage, vocab
     from utils.schema import Boxes, Features, Graph, load_stage
 
     parser = argparse.ArgumentParser(description="Print the graph nodes that best match a text.")
-    parser.add_argument("text", nargs="+", help="what to look for, such as: striped pillow")
+    parser.add_argument("text", nargs="*", help="what to look for, such as: striped pillow")
+    parser.add_argument("--position", nargs=3, type=float, help="nearest objects to a world-coordinate x y z")
     parser.add_argument("--source", default="replica/room_0/00")
     parser.add_argument("--stride", type=int, default=20)
     parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
@@ -51,11 +77,29 @@ if __name__ == "__main__":
     parser.add_argument("--vocab", help="as for run.py")
     parser.add_argument("--top", type=int, default=5)
     args = parser.parse_args()
+    if not args.text and args.position is None:
+        parser.error("provide a text query or --position x y z")
 
     try:
         run = footage.make_run(args.source, args.stride, args.mask_source, args.pose_source, vocab.tag(args.vocab))
     except ValueError as e:
         parser.error(str(e))
+    memory_path = run.stage_dir("graph") / "memory"
+    if (memory_path / "metadata.json").exists():
+        memory = load_memory(memory_path)
+        if args.position is not None:
+            for object_id, distance in nearest(memory, args.position, args.top):
+                print(f"node {object_id}: {memory.nodes[object_id].label}, distance {distance:.2f} m")
+        if args.text:
+            objects, object_emb = memory_embeddings(memory)
+            if len(objects):
+                order, scores = rank(siglip.load_encoder().encode_text([" ".join(args.text)]).cpu().numpy(), object_emb)
+                for row, score in zip(order[0, : args.top], scores[0, : args.top], strict=True):
+                    node = memory.nodes[int(objects[row])]
+                    print(f"{score:.3f} node {node.id}: {node.label}, seen {node.first_seen}-{node.last_seen}")
+        raise SystemExit(0)
+    if args.position is not None:
+        parser.error("nearest queries require the persistent graph; rebuild it with run.py --graph-only")
     masks = load_stage(run.stage_dir("masks"), Masks)
     vocab = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
     graph = load_stage(run.stage_dir("graph"), Graph)

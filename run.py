@@ -12,8 +12,9 @@ import numpy as np
 import torch
 
 import evaluate
-from graph import graph
-from models import dino, sam, siglip, vggt
+from graph import pipeline, query
+from graph.association import AssociationConfig
+from models import dino, sam, siglip
 from utils import footage, lift3d, replica, vocab
 from utils.schema import (
     Boxes,
@@ -31,7 +32,7 @@ from utils.schema import (
 STAGES = ["frames", "masks", "features", "siglip", "vggt", "boxes", "graph", "events", "gt_boxes"]
 # A stage is recomputed when one of these was saved after it, such as boxes after a new vggt stage
 UPSTREAM = {"masks": ["frames"], "features": ["masks"], "siglip": ["masks"], "boxes": ["masks", "vggt"]}
-UPSTREAM["graph"] = ["masks", "features", "boxes"]
+UPSTREAM["graph"] = ["masks", "features", "siglip", "boxes"]
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument(
@@ -42,6 +43,11 @@ parser.add_argument(
 )
 parser.add_argument("--stride", type=int, default=20)
 parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
+parser.add_argument("--association-config", type=str, default=str(pipeline.DEFAULT_CONFIG))
+parser.add_argument(
+    "--graph-only", action="store_true", help="rebuild only from cached observations; no model inference"
+)
+parser.add_argument("--skip-text-eval", action="store_true", help="score identities without loading the text encoder")
 parser.add_argument(
     "--pose-source", choices=["gt", "vggt"], help="default: Replica's on Replica, VGGT-Omega's on phone video"
 )
@@ -57,6 +63,10 @@ parser.add_argument(
     help="recompute these stages even if they are cached, or every stage when none is named",
 )
 args = parser.parse_args()
+try:
+    association_config = AssociationConfig.from_json(args.association_config)
+except (ValueError, TypeError, OSError) as e:
+    parser.error(f"invalid association configuration: {e}")
 if args.stride < 1:
     parser.error("stride must be positive")
 try:
@@ -76,6 +86,11 @@ def stale(run: Run, stage: str, params: dict | None = None) -> bool:
     if args.overwrite is not None and (not args.overwrite or stage in args.overwrite):
         return True
     if not run.done(stage):
+        return True
+    if stage == "graph" and (
+        not (run.stage_dir("graph") / "memory" / "metadata.json").exists()
+        or any(not (run.stage_dir("graph") / f"{name}.json").exists() for name in ("edges", "matches", "history"))
+    ):
         return True
     metadata = run.stage_dir(stage) / "metadata.json"
     cached = json.loads(metadata.read_text())
@@ -100,8 +115,11 @@ def prompts(run: Run) -> list[str]:
 
 def free_gpu() -> None:
     """Drop every loaded model, so VGGT-Omega gets the GPU to itself and the next run's SAM gets it back."""
-    for load in (sam.load_model, dino.load_encoder, siglip.load_encoder, vggt.load_model, vggt.load_depth_model):
+    for load in (sam.load_model, dino.load_encoder, siglip.load_encoder):
         load.cache_clear()
+    if "vggt" in globals():
+        vggt.load_model.cache_clear()
+        vggt.load_depth_model.cache_clear()
     torch.cuda.empty_cache()
 
 
@@ -127,6 +145,12 @@ def compute_masks(run: Run) -> None:
 results = {}
 for run in runs:
     source = run.source
+    if args.graph_only:
+        result = pipeline.rebuild(run, association_config)
+        print(f"{source}: saved {len(result.memory.nodes)} persistent objects to {run.stage_dir('graph')}")
+        continue
+    if run.pose_source == "vggt":
+        from models import vggt
     if not footage.is_replica(run) and stale(run, "frames"):
         footage.extract(run)
         print(f"Saved {len(footage.frame_numbers(run))} frames to {run.stage_dir('frames')}")
@@ -140,16 +164,19 @@ for run in runs:
     masks = load_stage(run.stage_dir("masks"), Masks)
 
     if stale(run, "features"):
+        free_gpu()
         save_stage(run.stage_dir("features"), dino.features(run, masks, dino.load_encoder()), {"model": dino.MODEL_ID})
         check_aligned(run, "features")
         print(f"Saved features to {run.stage_dir('features')}")
     features = load_stage(run.stage_dir("features"), Features)
 
     if stale(run, "siglip"):
+        free_gpu()
         embeddings = siglip.features(run, masks, siglip.load_encoder())
         save_stage(run.stage_dir("siglip"), embeddings, {"model": siglip.MODEL_ID})
         check_aligned(run, "siglip")
         print(f"Saved SigLIP embeddings to {run.stage_dir('siglip')}")
+    embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
 
     # Depth and cameras from VGGT-Omega instead of Replica's, in metres with z up and without ground truth
     if run.pose_source == "vggt" and stale(run, "vggt", vggt.PARAMS):
@@ -172,8 +199,12 @@ for run in runs:
         print(f"Saved boxes to {run.stage_dir('boxes')}")
     boxes = load_stage(run.stage_dir("boxes"), Boxes)
 
-    if stale(run, "graph", graph.PARAMS):
-        save_stage(run.stage_dir("graph"), graph.build(masks, boxes, features), graph.PARAMS)
+    if stale(run, "graph", association_config.metadata()):
+        names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
+        built = pipeline.replay(
+            masks, boxes, features, embeddings, names, association_config, frames=footage.frame_numbers(run)
+        )
+        pipeline.save_result(run.stage_dir("graph"), built)
         check_aligned(run, "graph")
         print(f"Saved graph to {run.stage_dir('graph')}")
 
@@ -212,11 +243,20 @@ for run in runs:
     }
     results[source] = {name: evaluate.evaluate(masks, ids, gt, events, objects) for name, ids in predictions.items()}
     embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
-    for level in ("level0", "level1"):
+    persistent_vectors = query.memory_embeddings(pipeline.load_memory(run.stage_dir("graph") / "memory"))
+    for level in () if args.skip_text_eval else ("level0", "level1"):
         targets = replica.load_queries(replica.parse_source(run.source)[0], level)
         text = siglip.load_encoder().encode_text(list(targets)).cpu().numpy()
         for name, ids in predictions.items():
-            scores = evaluate.queries(masks, ids, gt, embeddings, targets, text)
+            scores = evaluate.queries(
+                masks,
+                ids,
+                gt,
+                embeddings,
+                targets,
+                text,
+                object_vectors=persistent_vectors if name == "graph" else None,
+            )
             results[source][name].update({f"{level}_{k}": v for k, v in scores.items()})
     run.stage_dir("eval").mkdir(parents=True, exist_ok=True)
     (run.stage_dir("eval") / "metrics.json").write_text(json.dumps(results[source], indent=2))
@@ -224,5 +264,6 @@ for run in runs:
 if results:
     print(f"\nmask source {args.mask_source}, pose source {runs[0].pose_source}, stride {args.stride}")
     print(evaluate.table(results))
-    print("\nText queries (OpenLex3D level 0 and level 1)")
-    print(evaluate.table(results, evaluate.QUERY_COLUMNS))
+    if not args.skip_text_eval:
+        print("\nText queries (OpenLex3D level 0 and level 1)")
+        print(evaluate.table(results, evaluate.QUERY_COLUMNS))
