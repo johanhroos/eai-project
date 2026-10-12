@@ -10,13 +10,24 @@ import pycocotools.mask as mask_utils
 from PIL import Image, ImageDraw, ImageFont
 
 from graph.association import valid_box
+from graph.edges import build_edges
+from graph.node import Node
 from graph.pipeline import cached_observations, replay, save_result
-from graph.query import memory_embeddings, rank
+from graph.query import rank
 from utils import footage
 
 
 def color(object_id):
     return np.random.default_rng(int(object_id)).integers(65, 230, size=3)
+
+
+def memory_nodes(memory) -> list[Node]:
+    """The memory's objects as graph.node.Node, for graph.edges. Objects without a box get a NaN box."""
+    nodes = []
+    for n in sorted(memory.nodes.values(), key=lambda n: n.id):
+        lo, hi = (n.box.min, n.box.max) if valid_box(n.box) else (np.full(3, np.nan), np.full(3, np.nan))
+        nodes.append(Node(n.id, n.label or "", lo, hi, np.empty(0, int), np.empty(0, np.int32), []))
+    return nodes
 
 
 def boxes_figure(memory, selected=None):
@@ -51,16 +62,16 @@ def boxes_figure(memory, selected=None):
                 showlegend=False,
             )
         )
-    for edge in memory.edges():
-        a, b = (memory.nodes[edge[key]].box.center for key in ("source", "target"))
+    for edge in build_edges(memory_nodes(memory)):
+        a, b = (memory.nodes[key].box.center for key in (edge.a, edge.b))
         fig.add_trace(
             go.Scatter3d(
                 x=[a[0], b[0]],
                 y=[a[1], b[1]],
                 z=[a[2], b[2]],
                 mode="lines",
-                line={"color": "gray" if edge["relation"] == "near" else "orange", "width": 2},
-                text=f"{edge['relation']}: {edge['distance']:.2f} m",
+                line={"color": "gray" if edge.relation == "near" else "orange", "width": 2},
+                text=f"{edge.relation}: {edge.gap:.2f} m",
                 hoverinfo="text",
                 showlegend=False,
             )
@@ -135,7 +146,6 @@ def scores_figure(matches):
         "SAM IDs",
         "Decision",
         "DINO",
-        "SigLIP",
         "IoU",
         "Center",
         "Geometry",
@@ -153,7 +163,7 @@ def scores_figure(matches):
         ]
         row += [
             "—" if key not in scores else f"{scores[key]:.3f}"
-            for key in ("dino", "siglip", "iou", "center", "geometry", "score")
+            for key in ("dino", "iou", "center", "geometry", "score")
         ]
         for column, value in zip(values, row, strict=True):
             column.append(value)
@@ -187,7 +197,7 @@ class GraphExplorer:
         return self._prefix[1]
 
     def save(self):
-        save_result(self.run.stage_dir("association"), self.result)
+        save_result(self.run.stage_dir("graph"), self.result)
 
     def search(self, text, top=5, encoder=None):
         """Rank remembered objects by SigLIP text similarity, without image inference."""
@@ -196,9 +206,10 @@ class GraphExplorer:
             raise ValueError("Enter an object description, such as chair")
         if top < 1:
             raise ValueError("top must be positive")
-        objects, embeddings = memory_embeddings(self.result.memory)
-        if not len(objects):
+        nodes = [n for n in self.result.memory.nodes.values() if n.siglip is not None]
+        if not nodes:
             return []
+        objects, embeddings = [n.id for n in nodes], np.stack([n.siglip for n in nodes])
         if text not in self._text_cache:
             if encoder is None:
                 from models.siglip import load_encoder
@@ -242,7 +253,6 @@ class GraphExplorer:
 
         controls = {
             "dino_weight": slider("DINO weight", c.dino_weight, high=2),
-            "siglip_weight": slider("SigLIP weight", c.siglip_weight, high=2),
             "box_weight": slider("3D weight", c.box_weight, high=2),
             "threshold": slider("Threshold", c.threshold),
             "max_descriptors": widgets.IntSlider(description="Bank size", value=c.max_descriptors, min=1, max=16),
@@ -250,7 +260,6 @@ class GraphExplorer:
             "geometry_iou_weight": slider("IoU share", c.geometry_iou_weight),
             "center_distance_scale": slider("Center (m)", c.center_distance_scale, low=0.05, high=3, step=0.05),
             "enable_dino": widgets.Checkbox(description="Use DINO", value=c.enable_dino),
-            "enable_siglip": widgets.Checkbox(description="Use SigLIP", value=c.enable_siglip),
             "enable_geometry": widgets.Checkbox(description="Use geometry", value=c.enable_geometry),
             "require_same_label": widgets.Checkbox(description="Same label", value=c.require_same_label),
         }
@@ -325,7 +334,7 @@ class GraphExplorer:
 
         def save_clicked(button):
             self.save()
-            path = self.run.stage_dir("association") / "association_config.json"
+            path = self.run.stage_dir("graph") / "association_config.json"
             import json
             from dataclasses import asdict
 

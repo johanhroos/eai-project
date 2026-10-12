@@ -19,7 +19,7 @@ from matplotlib import patches, patheffects
 from graph.edges import MAX_SIDE, STRUCTURE, build_edges
 from graph.node import build_nodes, colours
 from utils import map_view
-from utils.schema import Boxes, Features, Graph, Masks, Run, load_stage
+from utils.schema import Boxes, Graph, Masks, Run, load_stage
 
 MARGIN = 0.5  # metres of room shown around the objects
 
@@ -30,7 +30,7 @@ def load_graph(run: Run) -> tuple[list, list]:
     vocab = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
     graph = load_stage(run.stage_dir("graph"), Graph)
     boxes = load_stage(run.stage_dir("boxes"), Boxes)
-    nodes = build_nodes(masks, boxes, load_stage(run.stage_dir("features"), Features), graph, vocab)
+    nodes = build_nodes(masks, boxes, graph, vocab)
     return nodes, build_edges(nodes)
 
 

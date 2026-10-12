@@ -25,7 +25,7 @@ from torchcodec.encoders import VideoEncoder
 
 from graph.node import build_nodes
 from utils import footage, lift3d, replica, vocab
-from utils.schema import Boxes, Features, Graph, Masks, Run, load_stage
+from utils.schema import Boxes, Graph, Masks, Run, load_stage
 
 TITLES = {"tracks": "SAM tracks", "graph": "graph nodes", "gt": "ground truth"}
 METRICS = {"tracks": "tracks, no graph", "graph": "graph"}  # names in eval/metrics.json
@@ -66,8 +66,7 @@ def panel_sources(run: Run) -> dict[str, tuple[Masks, np.ndarray, dict, dict]]:
     if "graph" in args.panels:
         graph = load_stage(run.stage_dir("graph"), Graph)
         boxes = load_stage(run.stage_dir("boxes"), Boxes)
-        features = load_stage(run.stage_dir("features"), Features)
-        nodes = build_nodes(masks, boxes, features, graph, vocab)
+        nodes = build_nodes(masks, boxes, graph, vocab)
         colours = {n.id: track_colour[np.bincount(masks.sam_id[n.rows]).argmax()] for n in nodes}
         out["graph"] = masks, graph.node, {n.id: n.label for n in nodes}, colours
     if "gt" in args.panels:

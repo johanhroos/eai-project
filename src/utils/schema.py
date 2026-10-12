@@ -96,12 +96,13 @@ def check_aligned(run: Run, stage: str) -> None:
     if n != n_masks:
         raise ValueError(f"{stage} has {n} rows, masks has {n_masks}")
 
+
 @dataclass
 class Graph:
-    """Persistent node of every mask, row-aligned with masks.
+    """Persistent node of every mask, row-aligned with masks (graph/pipeline.py).
 
-    Batch graph.build assigns whole SAM tracks; incremental association may split
-    a drifting SAM track. Prefix visualization uses -1 for unprocessed rows.
+    Masks join nodes one frame at a time by appearance and location, so one SAM track can end up in several nodes and
+    several tracks in one. A prefix replay (graph/visualize.py) uses -1 for the rows not processed yet.
     """
 
     node: np.ndarray  # (N,) int32, node ID: 0, 1, ... in order of first appearance
@@ -175,6 +176,7 @@ class Events:
         _check("kind", self.kind, np.int8, (n,))
         _check("gap", self.gap, np.int32, (n,))
 
+
 @dataclass
 class Boxes:
     """3D box of every mask: row i belongs to mask i of the masks stage. World frame, metres, axis-aligned.
@@ -195,6 +197,7 @@ class Boxes:
         if self.points is not None:
             _check("points", self.points, np.float16, (n, None, 3))
 
+
 @dataclass
 class ObjectBoxes:
     """Ground-truth 3D box of each object, fused over all frames. Not aligned with the masks."""
@@ -210,6 +213,7 @@ class ObjectBoxes:
         _check("box_min", self.box_min, np.float32, (n, 3))
         _check("box_max", self.box_max, np.float32, (n, 3))
         _check("n_points", self.n_points, np.int32, (n,))
+
 
 def save_stage(stage_dir: Path, data, metadata: dict) -> None:
     """General function to cache data e.g. SAM masks or DINO features."""
@@ -244,9 +248,8 @@ class PersistentObjects:
     box_min: np.ndarray
     box_max: np.ndarray
     n_points: np.ndarray
-    dino: np.ndarray
-    siglip: np.ndarray
-    siglip_sum: np.ndarray
+    dino: np.ndarray  # (n, max_descriptors, D) float16, each node's bank of DINO descriptors, zero-padded
+    siglip_sum: np.ndarray  # (n, D) float32, sum of the node's observations' SigLIP embeddings, for text search
     siglip_count: np.ndarray
     first_seen: np.ndarray
     last_seen: np.ndarray
@@ -263,9 +266,8 @@ class PersistentObjects:
             _check(name, getattr(self, name), np.float32, (n, 3))
         for name in ("n_points", "siglip_count", "first_seen", "last_seen", "observation_count"):
             _check(name, getattr(self, name), np.int64, (n,))
-        for name in ("dino", "siglip"):
-            _check(name, getattr(self, name), np.float16, (n, None, None))
-        _check("siglip_sum", self.siglip_sum, np.float32, (n, self.siglip.shape[2]))
+        _check("dino", self.dino, np.float16, (n, None, None))
+        _check("siglip_sum", self.siglip_sum, np.float32, (n, None))
         if len(self.labels) != n or len(np.unique(self.object_id)) != n:
             raise ValueError("invalid persistent node IDs or labels")
         if n and self.next_id <= int(self.object_id.max()):

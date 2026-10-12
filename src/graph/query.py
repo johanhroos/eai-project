@@ -8,35 +8,15 @@ Run it to search a run's graph, after run.py has cached the stages:
 --near ranks the matches by distance instead, to the object that best matches another text (graph/edges.py):
 
     uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --near "grey sofa"
+
+--position lists the objects nearest to a point in the world frame, with no text encoder:
+
+    uv run --no-sync python -m graph.query --source replica/room_0/00 --position 3.6 2.5 -0.9
 """
 
 import numpy as np
 
 from utils.schema import Masks, TextAligned
-
-
-def memory_embeddings(memory):
-    """Text-retrieval descriptors directly from the compact saved memory."""
-    nodes = [n for n in memory.nodes.values() if n.siglip is not None]
-    ids = np.array([n.id for n in nodes], np.int32)
-    dimension = memory.siglip_dimension or 0
-    embeddings = np.stack([n.siglip for n in nodes]) if nodes else np.empty((0, dimension), np.float32)
-    return ids, embeddings
-
-
-def nearest(memory, position, top=5):
-    """Nearest valid object boxes to a world position, as (ID, distance) pairs."""
-    from graph.association import valid_box
-
-    point = np.asarray(position, np.float32)
-    if point.shape != (3,) or not np.isfinite(point).all():
-        raise ValueError("position must be a finite world-coordinate 3-vector")
-    distances = []
-    for node in memory.nodes.values():
-        if valid_box(node.box):
-            gap = np.maximum(np.maximum(node.box.min - point, point - node.box.max), 0)
-            distances.append((node.id, float(np.linalg.norm(gap))))
-    return sorted(distances, key=lambda item: (item[1], item[0]))[:top]
 
 
 def object_embeddings(masks: Masks, emb: TextAligned, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -76,23 +56,13 @@ if __name__ == "__main__":
     import json
 
     from graph import edges as graph_edges
-    from graph.edges import build_edges, neighbours
     from graph.node import build_nodes
-    from graph.pipeline import load_memory
     from models import siglip
     from utils import footage, vocab
-    from utils.schema import Boxes, Features, Graph, load_stage
+    from utils.schema import Boxes, Graph, load_stage
 
     parser = argparse.ArgumentParser(description="Print the graph nodes that best match a text.")
     parser.add_argument("text", nargs="*", help="what to look for, such as: striped pillow")
-    parser.add_argument(
-        "--position", nargs=3, type=float, help="nearest objects to a world-coordinate x y z (implies --association)"
-    )
-    parser.add_argument(
-        "--association",
-        action="store_true",
-        help="search the association stage's memory (graph/pipeline.py, run.py --association) instead of the graph",
-    )
     parser.add_argument("--source", default="replica/room_0/00")
     parser.add_argument("--stride", type=int, default=20)
     parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
@@ -104,56 +74,45 @@ if __name__ == "__main__":
         help="rank the matches by distance to the object that best matches this text, such as: sofa. The matches are "
         "then the objects labelled with the text when it is one of SAM's prompts, else its --top best matches",
     )
+    parser.add_argument("--position", nargs=3, type=float, help="list the objects nearest to this world point x y z")
     args = parser.parse_args()
     if not args.text and args.position is None:
-        parser.error("provide a text query or --position x y z")
+        parser.error("give a text to look for, or --position x y z")
 
     try:
         run = footage.make_run(args.source, args.stride, args.mask_source, args.pose_source, vocab.tag(args.vocab))
     except ValueError as e:
         parser.error(str(e))
-    memory_path = run.stage_dir("association") / "memory"
-    if (args.association or args.position is not None) and (memory_path / "metadata.json").exists():
-        memory = load_memory(memory_path)
-        if args.position is not None:
-            for object_id, distance in nearest(memory, args.position, args.top):
-                print(f"node {object_id}: {memory.nodes[object_id].label}, distance {distance:.2f} m")
-        if args.text:
-            objects, object_emb = memory_embeddings(memory)
-            if len(objects):
-                order, scores = rank(siglip.load_encoder().encode_text([" ".join(args.text)]).cpu().numpy(), object_emb)
-                for row, score in zip(order[0, : args.top], scores[0, : args.top], strict=True):
-                    node = memory.nodes[int(objects[row])]
-                    print(f"{score:.3f} node {node.id}: {node.label}, seen {node.first_seen}-{node.last_seen}")
-        raise SystemExit(0)
-    if args.position is not None:
-        parser.error("--position needs the association stage; build it with run.py --association")
-    if args.association:
-        parser.error("no association stage; build it with run.py --association")
     masks = load_stage(run.stage_dir("masks"), Masks)
-    vocab = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
+    names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
     graph = load_stage(run.stage_dir("graph"), Graph)
-    nodes = build_nodes(
-        masks,
-        load_stage(run.stage_dir("boxes"), Boxes),
-        load_stage(run.stage_dir("features"), Features),
-        graph,
-        vocab,
-    )
-    objects, object_emb = object_embeddings(masks, load_stage(run.stage_dir("siglip"), TextAligned), graph.node)
-    text = " ".join(args.text)
-    edges = build_edges(nodes)
-    queries = [text] if args.near is None else [text, args.near]
-    sims = siglip.load_encoder().encode_text(queries).cpu().numpy() @ object_emb.T  # (Q, M)
-    # build_nodes lists nodes in ID order, and IDs run 0, 1, ..., so objects[row] indexes nodes
+    nodes = build_nodes(masks, load_stage(run.stage_dir("boxes"), Boxes), graph, names)
+    edges = graph_edges.build_edges(nodes)
+    # build_nodes lists nodes in ID order, and IDs run 0, 1, ..., so an ID indexes nodes
 
     def describe(n) -> str:
         centre = ", ".join(f"{c:.2f}" for c in (n.box_min + n.box_max) / 2)
-        links = ", ".join(f"{rel} {nodes[o].label} {o}" for rel, o in neighbours(edges, n.id) if rel != "near")
+        links = ", ".join(
+            f"{rel} {nodes[o].label} {o}" for rel, o in graph_edges.neighbours(edges, n.id) if rel != "near"
+        )
         return (
             f"node {n.id:>3} {n.label:<14} centre ({centre}) m, frames {n.frames[0]}-{n.frames[-1]}"
             f" ({len(n.frames)} seen), SAM tracks {n.sam_ids}" + (f", {links}" if links else "")
         )
+
+    if args.position is not None:
+        point = np.array(args.position, np.float32)
+        lo, hi = graph_edges.box_corners(nodes)
+        gap = np.linalg.norm(np.clip(np.maximum(lo - point, point - hi), 0, None), axis=1)  # 0 inside a box
+        print(f"{run.source}: nearest to ({', '.join(f'{c:g}' for c in point)})")
+        for i in [i for i in np.argsort(gap, kind="stable") if np.isfinite(gap[i])][: args.top]:
+            print(f"  {gap[i]:.2f} m  {describe(nodes[i])}")
+    if not args.text:
+        raise SystemExit
+    objects, object_emb = object_embeddings(masks, load_stage(run.stage_dir("siglip"), TextAligned), graph.node)
+    text = " ".join(args.text)
+    queries = [text] if args.near is None else [text, args.near]
+    sims = siglip.load_encoder().encode_text(queries).cpu().numpy() @ object_emb.T  # (Q, M)
 
     if args.near is None:
         print(f'{run.source}: "{text}"')

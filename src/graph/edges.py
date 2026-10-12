@@ -132,7 +132,7 @@ if __name__ == "__main__":
 
     from graph.node import build_nodes
     from utils import footage, vocab
-    from utils.schema import Boxes, Features, Graph, Masks, load_stage
+    from utils.schema import Boxes, Graph, Masks, load_stage
 
     parser = argparse.ArgumentParser(description="Print the edges of a run's graph.")
     parser.add_argument("--source", default="replica/room_0/00")
@@ -151,7 +151,6 @@ if __name__ == "__main__":
     nodes = build_nodes(
         masks,
         load_stage(run.stage_dir("boxes"), Boxes),
-        load_stage(run.stage_dir("features"), Features),
         load_stage(run.stage_dir("graph"), Graph),
         names,
     )
