@@ -11,7 +11,8 @@ wheels/
 .venv
 
 # Data
-/data/
+/data/*
+!/data/phone/
 /outputs/
 .virtual_documents/
 .ruff_cache/
