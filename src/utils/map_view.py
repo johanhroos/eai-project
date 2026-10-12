@@ -1,5 +1,8 @@
 """A run's object map in Rerun: the room as one frozen point cloud, the camera path and the objects as 3D boxes.
 
+The graph's edges (graph/edges.py) are lines between the box centres: world/edges/on in black, from the object on top
+to the one under it, and world/edges/near in grey. Hide either in the viewer's entity tree.
+
 Nothing in the room moves. Scrubbing the frame timeline only moves the camera along its path and shows what it saw,
 with the objects' 2D boxes; a run of several videos gets one path per video. The point cloud fuses the depth of
 FUSED_FRAMES frames spread over the run, lifted with the run's poses (Replica's or VGGT-Omega's). Pixels on depth edges
@@ -25,6 +28,7 @@ import rerun.blueprint as rrb
 from PIL import Image
 from scipy.ndimage import maximum_filter, minimum_filter
 
+from graph.edges import build_edges
 from graph.node import build_nodes
 from models.sam import mask_boxes
 from utils import footage, lift3d, replica
@@ -65,6 +69,7 @@ def log_map(run: Run) -> None:
     graph = load_stage(run.stage_dir("graph"), Graph)
     boxes = load_stage(run.stage_dir("boxes"), Boxes)
     nodes = build_nodes(masks, boxes, load_stage(run.stage_dir("features"), Features), graph, vocab)
+    edges = build_edges(nodes)
     nodes = [n for n in nodes if n.label not in replica.IGNORE_CLASSES]  # walls and floors, as in the evaluation
 
     # Each object keeps the colour utils/video.py gives it: that of its largest SAM track
@@ -96,6 +101,32 @@ def log_map(run: Run) -> None:
         ),
         static=True,
     )
+
+    centre = {n.id: (n.box_min + n.box_max) / 2 for n in placed}
+    names = {n.id: f"{n.label} #{n.id}" for n in placed}
+    for relation, colour, radius in (("on", (20, 20, 20), 0.012), ("near", (150, 150, 150), 0.004)):
+        pairs = [(e.a, e.b) for e in edges if e.relation == relation and e.a in centre and e.b in centre]
+        if pairs:
+            rr.log(
+                f"world/edges/{relation}",
+                rr.Arrows3D(
+                    origins=[centre[a] for a, _ in pairs],
+                    vectors=[centre[b] - centre[a] for a, b in pairs],
+                    radii=radius,
+                    colors=colour,
+                    labels=[f"{names[a]} {relation} {names[b]}" for a, b in pairs],
+                    show_labels=False,
+                )
+                if relation == "on"
+                else rr.LineStrips3D(
+                    [[centre[a], centre[b]] for a, b in pairs],
+                    radii=radius,
+                    colors=colour,
+                    labels=[f"{names[a]} near {names[b]}" for a, b in pairs],
+                    show_labels=False,
+                ),
+                static=True,
+            )
 
     frames = footage.frame_numbers(run).tolist()
     get = lift3d.geometry_source(run)
