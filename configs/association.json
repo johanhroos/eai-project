@@ -1,0 +1,18 @@
+{
+  "dino_weight": 0.45,
+  "siglip_weight": 0.15,
+  "box_weight": 0.4,
+  "enable_dino": true,
+  "enable_siglip": true,
+  "enable_geometry": true,
+  "threshold": 0.45,
+  "max_descriptors": 4,
+  "max_candidate_distance": 1.0,
+  "geometry_iou_weight": 0.5,
+  "center_distance_scale": 0.5,
+  "descriptor_duplicate_similarity": 0.95,
+  "geometry_rate": 0.2,
+  "require_same_label": false,
+  "duplicate_iou": 0.6,
+  "near_distance": 0.75
+}

@@ -2,6 +2,9 @@
 
 Replica runs are scored against the ground truth at the end. Phone runs (--source phone/<name> for a video
 data/phone/<name>.<ext>) have no ground truth: they use VGGT-Omega's poses and stop after the graph.
+
+--association also builds Magnus's persistent association graph (graph/pipeline.py) as its own stage next to the
+graph, and scores it as a third row. Without it, the graph stage and the scores are as before.
 """
 
 import argparse
@@ -12,7 +15,7 @@ import numpy as np
 import torch
 
 import evaluate
-from graph import graph
+from graph import graph, query
 from models import dino, sam, siglip, vggt
 from utils import footage, lift3d, replica, vocab
 from utils.schema import (
@@ -29,10 +32,11 @@ from utils.schema import (
     save_stage,
 )
 
-STAGES = ["frames", "masks", "features", "siglip", "vggt", "boxes", "graph", "events", "gt_boxes"]
+STAGES = ["frames", "masks", "features", "siglip", "vggt", "boxes", "graph", "association", "events", "gt_boxes"]
 # A stage is recomputed when one of these was saved after it, such as boxes after a new vggt stage
 UPSTREAM = {"masks": ["frames"], "features": ["masks"], "siglip": ["masks"], "boxes": ["masks", "vggt"]}
 UPSTREAM["graph"] = ["masks", "features", "boxes"]
+UPSTREAM["association"] = ["masks", "features", "siglip", "boxes"]
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument(
@@ -43,6 +47,20 @@ parser.add_argument(
 )
 parser.add_argument("--stride", type=int, default=20)
 parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
+parser.add_argument(
+    "--association",
+    action="store_true",
+    help="also build the persistent association graph (graph/pipeline.py) and score it next to the graph",
+)
+parser.add_argument(
+    "--association-config", help="JSON of graph.association.AssociationConfig (default: configs/association.json)"
+)
+parser.add_argument(
+    "--graph-only",
+    action="store_true",
+    help="only rebuild the association stage from the cached stages, without loading any model",
+)
+parser.add_argument("--skip-text-eval", action="store_true", help="score identities without loading the text encoder")
 parser.add_argument(
     "--pose-source", choices=["gt", "vggt"], help="default: Replica's on Replica, VGGT-Omega's on phone video"
 )
@@ -58,6 +76,15 @@ parser.add_argument(
     help="recompute these stages even if they are cached, or every stage when none is named",
 )
 args = parser.parse_args()
+association_config = None
+if args.association or args.graph_only:
+    from graph import pipeline
+    from graph.association import AssociationConfig
+
+    try:
+        association_config = AssociationConfig.from_json(args.association_config or pipeline.DEFAULT_CONFIG)
+    except (ValueError, TypeError, OSError) as e:
+        parser.error(f"invalid association configuration: {e}")
 if args.stride < 1:
     parser.error("stride must be positive")
 try:
@@ -77,6 +104,12 @@ def stale(run: Run, stage: str, params: dict | None = None) -> bool:
     if args.overwrite is not None and (not args.overwrite or stage in args.overwrite):
         return True
     if not run.done(stage):
+        return True
+    memory = run.stage_dir(stage) / "memory" / "metadata.json"
+    if stage == "association" and (
+        not memory.exists()
+        or any(not (run.stage_dir(stage) / f"{n}.json").exists() for n in ("edges", "matches", "history"))
+    ):
         return True
     metadata = run.stage_dir(stage) / "metadata.json"
     cached = json.loads(metadata.read_text())
@@ -128,6 +161,10 @@ def compute_masks(run: Run) -> None:
 results = {}
 for run in runs:
     source = run.source
+    if args.graph_only:
+        result = pipeline.rebuild(run, association_config)
+        print(f"{source}: saved {len(result.memory.nodes)} persistent objects to {run.stage_dir('association')}")
+        continue
     if not footage.is_replica(run) and stale(run, "frames"):
         footage.extract(run)
         print(f"Saved {len(footage.frame_numbers(run))} frames to {run.stage_dir('frames')}")
@@ -178,6 +215,17 @@ for run in runs:
         check_aligned(run, "graph")
         print(f"Saved graph to {run.stage_dir('graph')}")
 
+    # Magnus's persistent association graph, only with --association: its own stage, so the graph above is unchanged
+    if args.association and stale(run, "association", association_config.metadata()):
+        names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
+        embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
+        built = pipeline.replay(
+            masks, boxes, features, embeddings, names, association_config, frames=footage.frame_numbers(run)
+        )
+        pipeline.save_result(run.stage_dir("association"), built)
+        check_aligned(run, "association")
+        print(f"Saved association graph to {run.stage_dir('association')}")
+
     if not footage.is_replica(run):
         node = load_stage(run.stage_dir("graph"), Graph).node
         clip = footage.clip_index(run)[np.searchsorted(footage.frame_numbers(run), masks.frame)]
@@ -211,13 +259,19 @@ for run in runs:
         "tracks, no graph": masks.sam_id,
         "graph": load_stage(run.stage_dir("graph"), Graph).node,
     }
+    if args.association:
+        predictions["association"] = load_stage(run.stage_dir("association"), Graph).node
     results[source] = {name: evaluate.evaluate(masks, ids, gt, events, objects) for name, ids in predictions.items()}
     embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
-    for level in ("level0", "level1"):
+    # The association graph is searched by the SigLIP means its memory stores, as graph.query --association does
+    vectors = {}
+    if args.association:
+        vectors["association"] = query.memory_embeddings(pipeline.load_memory(run.stage_dir("association") / "memory"))
+    for level in () if args.skip_text_eval else ("level0", "level1"):
         targets = replica.load_queries(replica.parse_source(run.source)[0], level)
         text = siglip.load_encoder().encode_text(list(targets)).cpu().numpy()
         for name, ids in predictions.items():
-            scores = evaluate.queries(masks, ids, gt, embeddings, targets, text)
+            scores = evaluate.queries(masks, ids, gt, embeddings, targets, text, object_vectors=vectors.get(name))
             results[source][name].update({f"{level}_{k}": v for k, v in scores.items()})
     names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
     gt_boxes = load_stage(run.stage_dir("gt_boxes"), ObjectBoxes)
@@ -231,7 +285,8 @@ for run in runs:
 if results:
     print(f"\nmask source {args.mask_source}, pose source {runs[0].pose_source}, stride {args.stride}")
     print(evaluate.table(results))
-    print("\nText queries (OpenLex3D level 0 and level 1)")
-    print(evaluate.table(results, evaluate.QUERY_COLUMNS))
+    if not args.skip_text_eval:
+        print("\nText queries (OpenLex3D level 0 and level 1)")
+        print(evaluate.table(results, evaluate.QUERY_COLUMNS))
     print("\nNearest object of a type (graph.query --near), against the GT boxes")
     print(evaluate.table(results, evaluate.NEAR_COLUMNS))
