@@ -15,7 +15,8 @@ GT objects of replica.IGNORE_CLASSES and GT detections under lift3d.MIN_PIXELS p
 that match them.
 
 queries scores the object map as a text search with the OpenLex3D queries (see its docstring). It works per object:
-OpenLex3D's own protocol scores point clouds instead.
+OpenLex3D's own protocol scores point clouds instead. nearest_objects scores the nearest-object query against the GT
+boxes.
 """
 
 from collections import Counter, defaultdict
@@ -24,9 +25,10 @@ import numpy as np
 import pycocotools.mask as mask_utils
 from scipy.optimize import linear_sum_assignment
 
-from graph import query
+from graph import edges, query
+from graph.node import build_nodes
 from utils import lift3d, replica
-from utils.schema import Events, Masks, TextAligned
+from utils.schema import Boxes, Events, Features, Graph, Masks, ObjectBoxes, TextAligned
 
 MATCH_IOU = 0.5
 REVISIT_WINDOW = 100  # raw frames to look for a match before the object leaves and after it comes back
@@ -163,6 +165,78 @@ def queries(
     }
 
 
+def nearest_objects(
+    masks: Masks,
+    ids: np.ndarray,
+    gt: Masks,
+    boxes: Boxes,
+    features: Features,
+    vocab: list[str],
+    gt_boxes: ObjectBoxes,
+    objects: dict,
+) -> dict:
+    """How often the map finds the nearest object of a type (graph.query --near), against the GT boxes.
+
+    Every GT object A that is seen in the run (lift3d.MIN_PIXELS) asks for the nearest object of every class C that has
+    at least two other seen objects, so that it matters which one comes first. The answer is the C object nearest to A
+    by their GT boxes (gt_boxes stage), ranked as graph.edges.nearest ranks nodes. In the map, A is the node that
+    stands for it (owners) and is seen in the most frames, and the candidates are ranked by their boxes (graph.node).
+    The query is right when the first candidate stands for the answer. A query whose A no node stands for is wrong.
+    Nodes that stand for A itself are never candidates: a duplicate of the anchor isn't another object.
+
+      labels  the candidates are the nodes labelled C, as for graph.query --near
+      oracle  the candidates are the nodes that stand for an object of class C: only the map's boxes and identities
+      anchor  share of the queries whose A some node stands for
+      reach   share of the queries whose A and answer some node stands for: what oracle gets with perfect boxes
+
+    Classes in replica.IGNORE_CLASSES are left out. The labels column needs SAM prompts that are Replica class names,
+    as on Replica without --vocab.
+    """
+    _, ids = np.unique(ids, return_inverse=True)  # 0, 1, ..., so node IDs are their indices in nodes
+    nodes = build_nodes(masks, boxes, features, Graph(node=ids.astype(np.int32)), vocab)
+    owner = owners(masks, ids, gt)
+    stands_for = np.array([owner.get(n.id, -1) for n in nodes])
+    node_class = np.array([objects[o].class_name if o >= 0 else "" for o in stands_for.tolist()])
+    labels = np.array([n.label for n in nodes])
+    n_frames = np.array([len(n.frames) for n in nodes])
+
+    seen = set(gt.sam_id[lift3d.rle_area(gt.rle) >= lift3d.MIN_PIXELS].tolist())
+    keep = [
+        k
+        for k, o in enumerate(gt_boxes.object_id.tolist())
+        if o in seen and objects[o].class_name not in replica.IGNORE_CLASSES
+    ]
+    gt_ids, lo, hi = gt_boxes.object_id[keep], gt_boxes.box_min[keep], gt_boxes.box_max[keep]
+    gt_class = np.array([objects[int(o)].class_name for o in gt_ids])
+
+    hits, anchored, reached = {"labels": [], "oracle": []}, [], []
+    for a, obj in enumerate(gt_ids.tolist()):
+        for c in np.unique(gt_class):
+            others = [k for k in np.flatnonzero(gt_class == c).tolist() if k != a]
+            if len(others) < 2:
+                continue
+            answer = int(gt_ids[edges.nearest_boxes(lo, hi, a, others)[0][0]])
+            owning = np.flatnonzero(stands_for == obj)
+            anchored.append(len(owning) > 0)
+            reached.append(len(owning) > 0 and answer in stands_for)
+            if not len(owning):
+                hits["labels"].append(False)
+                hits["oracle"].append(False)
+                continue
+            anchor = int(owning[n_frames[owning].argmax()])
+            for name, typed in (("labels", labels == c), ("oracle", node_class == c)):
+                ranked = edges.nearest(nodes, anchor, np.flatnonzero(typed & (stands_for != obj)).tolist())
+                hits[name].append(bool(ranked) and int(stands_for[ranked[0][0]]) == answer)
+    mean = lambda v: float(np.mean(v)) if v else float("nan")  # noqa: E731
+    return {
+        "near_labels": mean(hits["labels"]),
+        "near_oracle": mean(hits["oracle"]),
+        "near_anchor": mean(anchored),
+        "near_reach": mean(reached),
+        "near_queries": len(anchored),
+    }
+
+
 IDENTITY_COLUMNS = {
     "idf1": "IDF1",
     "idp": "IDP",
@@ -182,7 +256,14 @@ QUERY_COLUMNS = {
     "level1_top1": "L1 top1",
     "level0_reachable": "reach",
 }
-COUNTS = {"ids", "kept", "switched", "missed"}  # printed as integers
+NEAR_COLUMNS = {
+    "near_labels": "labels",
+    "near_oracle": "oracle",
+    "near_anchor": "anchor",
+    "near_reach": "reach",
+    "near_queries": "queries",
+}
+COUNTS = {"ids", "kept", "switched", "missed", "near_queries"}  # printed as integers
 
 
 def table(results: dict[str, dict[str, dict]], columns: dict[str, str] = IDENTITY_COLUMNS) -> str:

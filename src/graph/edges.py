@@ -112,8 +112,14 @@ def nearest(nodes: list[Node], anchor: int, candidates: list[int]) -> list[tuple
     the one in the middle of it comes first. The anchor itself and nodes without a box are left out. nodes is the
     list from build_nodes, whose IDs are its indices.
     """
-    lo, hi = box_corners(nodes)
-    gap, centre = box_gap(lo, hi)[anchor], centre_distance(lo, hi)[anchor]
+    return nearest_boxes(*box_corners(nodes), anchor, candidates)
+
+
+def nearest_boxes(lo: np.ndarray, hi: np.ndarray, anchor: int, candidates: list[int]) -> list[tuple[int, float, float]]:
+    """Like nearest, for any (M, 3) boxes such as the GT objects' (evaluate.nearest_objects): rows, not node IDs."""
+    a_lo, a_hi = lo[anchor : anchor + 1], hi[anchor : anchor + 1]
+    gap = np.linalg.norm(np.clip(np.maximum(lo - a_hi, a_lo - hi), 0, None), axis=1)  # as box_gap, for one row
+    centre = np.linalg.norm((lo + hi) / 2 - (a_lo + a_hi) / 2, axis=1)
     rows = [c for c in candidates if c != anchor and np.isfinite(gap[c])]
     rows.sort(key=lambda c: (round(float(gap[c]), 2), float(centre[c])))
     return [(c, float(gap[c]), float(centre[c])) for c in rows]
