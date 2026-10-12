@@ -16,6 +16,7 @@ from utils.schema import Masks, Run, TextAligned
 MODEL_ID = "google/siglip2-so400m-patch16-384"
 TEMPLATE = "This is a photo of {}."  # the prompt format of the SigLIP 2 model card
 TEXT_LENGTH = 64  # SigLIP is trained on text padded to 64 tokens; shorter padding gives worse embeddings
+BATCH = 32  # masks encoded at once (two crops each): a frame with all its masks at once overflows a 10 GB GPU
 
 
 class SiglipEncoder:
@@ -70,7 +71,13 @@ def features(run: Run, masks: Masks, encoder: SiglipEncoder) -> TextAligned:
     for frame in np.unique(masks.frame):
         rows = np.flatnonzero(masks.frame == frame)
         stack = mask_utils.decode([masks.rle[r] for r in rows]).astype(bool).transpose(2, 0, 1)  # (k, H, W)
-        emb = encoder.encode_masks(footage.load_rgb(run, int(frame)), stack, boxes[rows]).cpu().numpy()
+        image = footage.load_rgb(run, int(frame))
+        emb = np.concatenate(
+            [
+                encoder.encode_masks(image, stack[i : i + BATCH], boxes[rows[i : i + BATCH]]).cpu().numpy()
+                for i in range(0, len(rows), BATCH)
+            ]
+        )
         if siglip is None:
             siglip = np.zeros((len(masks.frame), emb.shape[1]), np.float16)
         siglip[rows] = emb.astype(np.float16)
