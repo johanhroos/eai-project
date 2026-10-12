@@ -101,7 +101,12 @@ uv run --no-sync python run.py --pose-source vggt                             # 
 uv run --no-sync python -m graph.query --source replica/room_0/00 "striped pillow"   # search a run's graph
 uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --near sofa   # nearest object of a type
 uv run --no-sync python -m graph.edges --source replica/room_0/00                      # list the graph's edges
+uv run --no-sync python -m graph.plot_edges --source replica/room_0/00                 # eval/edges.png, nodes and edges
 ```
+
+`notebooks/graph.ipynb` shows one run's nodes and edges from above (`graph/plot_edges.py`), one node with its
+neighbours, a nearest-object query, the map in Rerun with the edges as lines (`world/edges/on` and `world/edges/near`,
+also in `utils/map_view.py`'s other uses), and the query scores.
 
 `graph/edges.py` connects the nodes by their 3D boxes, computed on the fly like the nodes:
 
