@@ -25,6 +25,7 @@ from utils.schema import Features, Masks, Run
 # encode_masks() gives one embedding per object mask instead, and features() runs it over a whole run.
 
 MODEL_ID = "facebook/dinov3-vitl16-pretrain-lvd1689m"
+BATCH = 32  # masks encoded at once: a frame with all its masks at once can overflow a 10 GB GPU
 
 
 class DINOEncoder:
@@ -95,8 +96,10 @@ def features(run: Run, masks: Masks, encoder: DINOEncoder) -> Features:
     for frame in np.unique(masks.frame):
         rows = np.flatnonzero(masks.frame == frame)
         stack = mask_utils.decode([masks.rle[r] for r in rows]).astype(bool).transpose(2, 0, 1)  # (k, H, W)
-        embeddings = encoder.encode_masks(footage.load_rgb(run, int(frame)), stack, boxes[rows])
-        dino[rows] = embeddings.cpu().numpy().astype(np.float16)
+        image = footage.load_rgb(run, int(frame))
+        for i in range(0, len(rows), BATCH):
+            embeddings = encoder.encode_masks(image, stack[i : i + BATCH], boxes[rows[i : i + BATCH]])
+            dino[rows[i : i + BATCH]] = embeddings.cpu().numpy().astype(np.float16)
     return Features(dino=dino)
 
 
