@@ -21,6 +21,7 @@ from utils.schema import (
     Features,
     Graph,
     Masks,
+    ObjectBoxes,
     Run,
     TextAligned,
     check_aligned,
@@ -218,6 +219,12 @@ for run in runs:
         for name, ids in predictions.items():
             scores = evaluate.queries(masks, ids, gt, embeddings, targets, text)
             results[source][name].update({f"{level}_{k}": v for k, v in scores.items()})
+    names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
+    gt_boxes = load_stage(run.stage_dir("gt_boxes"), ObjectBoxes)
+    for name, ids in predictions.items():
+        results[source][name].update(
+            evaluate.nearest_objects(masks, ids, gt, boxes, features, names, gt_boxes, objects)
+        )
     run.stage_dir("eval").mkdir(parents=True, exist_ok=True)
     (run.stage_dir("eval") / "metrics.json").write_text(json.dumps(results[source], indent=2))
 
@@ -226,3 +233,5 @@ if results:
     print(evaluate.table(results))
     print("\nText queries (OpenLex3D level 0 and level 1)")
     print(evaluate.table(results, evaluate.QUERY_COLUMNS))
+    print("\nNearest object of a type (graph.query --near), against the GT boxes")
+    print(evaluate.table(results, evaluate.NEAR_COLUMNS))

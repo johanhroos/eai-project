@@ -162,7 +162,7 @@ uv run --no-sync python -m graph.plot --source phone/kitchen       # eval/graph.
 the pipeline with the prompts you set, and shows the map in Rerun (the point cloud, the camera's path and the objects'
 3D boxes), a picture of the graph, the labelled video and a text search. The graph picture (`graph/plot.py`) shows
 when each SAM track is seen, grouped by object, the objects from above, and every merge with its rule and every
-near-miss with what kept the two apart.
+near-miss with what kept the two apart. 
 
 - **Several videos of one place** make one map: `--source phone/IMG_0644+IMG_0645`. SAM tracks each video on its
   own, so no ID carries across the cut, VGGT-Omega reconstructs all their frames in one pass, so they share one 3D
@@ -211,6 +211,24 @@ An object stands for the GT object its masks match in the most frames.
 - **reach**: share of the queried objects that some object in the map stands for, the recall a perfect ranking gets.
 
 This scores whole objects; OpenLex3D's own protocol scores point clouds, so the numbers aren't comparable with the paper.
+
+The third table scores the nearest-object query (`graph.query --near`) against the GT boxes (`evaluate.nearest_objects`).
+Every GT object asks for the nearest object of every class with at least two other objects in the scene, and the answer
+is the one nearest by the GT boxes. In the map, the anchor is the node that stands for the GT object, and the query is
+right when the nearest candidate stands for the answer.
+
+- **labels**: the candidates are the nodes with that SAM label, as `--near` does it.
+- **oracle**: the candidates are the nodes that stand for an object of that class, which scores only the map's boxes
+  and identities.
+- **anchor**: share of the queries whose anchor is in the map. **reach**: whose anchor and answer both are, the most
+  oracle can get.
+
+On room_0 with SAM 3 masks (716 queries): labels 0.26 for the graph and 0.31 for the raw tracks, oracle 0.40 for both,
+anchor 0.70, reach 0.49. So when both objects are in the map, the boxes give the right answer 82% of the time (0.40 of
+0.49); most misses are objects SAM never segments well (no window or pillar matches a GT object). The graph's labels
+score is lower because a merged node takes the label with the most SAM score over its tracks, so an object merged
+into a node of another label drops out of the candidates. With GT masks all four are 0.94 to 1: the map's boxes come
+from every 20th frame and the GT boxes from all frames, which flips a few near ties.
 
 With `--mask-source gt` the tracks are the GT objects. Their identity row must score IDF1 = 1, which checks the
 evaluation itself, and their query row shows what SigLIP gets from a perfect map.
