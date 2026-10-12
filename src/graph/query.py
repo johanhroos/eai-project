@@ -4,6 +4,10 @@ Run it to search a run's graph, after run.py has cached the stages:
 
     uv run --no-sync python -m graph.query --source replica/room_0/00 "striped pillow"
     uv run --no-sync python -m graph.query --source phone/kitchen "coffee mug"
+
+--near ranks the matches by distance instead, to the object that best matches another text (graph/edges.py):
+
+    uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --near "grey sofa"
 """
 
 import numpy as np
@@ -23,6 +27,16 @@ def object_embeddings(masks: Masks, emb: TextAligned, ids: np.ndarray) -> tuple[
     return objects, sums / np.maximum(np.linalg.norm(sums, axis=1, keepdims=True), 1e-6)
 
 
+def of_type(labels: list[str], text: str, scores: np.ndarray, top: int) -> np.ndarray:
+    """Rows of the objects that are a text, for --near: the objects labelled with it when it is one of the labels.
+
+    Otherwise the top best matches by SigLIP. Labels come first because SigLIP's scores for a type are close: on room_0,
+    "lamp" scores 0.116 for the lamp and 0.112 for blinds. labels and scores (M,) are per object row.
+    """
+    rows = np.flatnonzero(np.array(labels) == text.strip().lower())
+    return rows if len(rows) else np.argsort(-scores, kind="stable")[:top]
+
+
 def rank(text_emb: np.ndarray, object_emb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """For each query, the object rows from best to worst match and their cosine similarities, both (Q, M).
 
@@ -37,6 +51,7 @@ if __name__ == "__main__":
     import argparse
     import json
 
+    from graph.edges import build_edges, nearest, neighbours
     from graph.node import build_nodes
     from models import siglip
     from utils import footage, vocab
@@ -50,6 +65,11 @@ if __name__ == "__main__":
     parser.add_argument("--pose-source", choices=["gt", "vggt"], help="as for run.py")
     parser.add_argument("--vocab", help="as for run.py")
     parser.add_argument("--top", type=int, default=5)
+    parser.add_argument(
+        "--near",
+        help="rank the matches by distance to the object that best matches this text, such as: sofa. The matches are "
+        "then the objects labelled with the text when it is one of SAM's prompts, else its --top best matches",
+    )
     args = parser.parse_args()
 
     try:
@@ -68,13 +88,26 @@ if __name__ == "__main__":
     )
     objects, object_emb = object_embeddings(masks, load_stage(run.stage_dir("siglip"), TextAligned), graph.node)
     text = " ".join(args.text)
-    order, scores = rank(siglip.load_encoder().encode_text([text]).cpu().numpy(), object_emb)
+    edges = build_edges(nodes)
+    queries = [text] if args.near is None else [text, args.near]
+    sims = siglip.load_encoder().encode_text(queries).cpu().numpy() @ object_emb.T  # (Q, M)
+    # build_nodes lists nodes in ID order, and IDs run 0, 1, ..., so objects[row] indexes nodes
 
-    print(f'{run.source}: "{text}"')
-    for row, score in zip(order[0, : args.top], scores[0, : args.top], strict=True):
-        n = nodes[int(objects[row])]  # build_nodes lists nodes in ID order, and IDs run 0, 1, ...
+    def describe(n) -> str:
         centre = ", ".join(f"{c:.2f}" for c in (n.box_min + n.box_max) / 2)
-        print(
-            f"  {score:.3f}  node {n.id:>3} {n.label:<14} centre ({centre}) m, frames {n.frames[0]}-{n.frames[-1]}"
-            f" ({len(n.frames)} seen), SAM tracks {n.sam_ids}"
+        links = ", ".join(f"{rel} {nodes[o].label} {o}" for rel, o in neighbours(edges, n.id) if rel != "near")
+        return (
+            f"node {n.id:>3} {n.label:<14} centre ({centre}) m, frames {n.frames[0]}-{n.frames[-1]}"
+            f" ({len(n.frames)} seen), SAM tracks {n.sam_ids}" + (f", {links}" if links else "")
         )
+
+    if args.near is None:
+        print(f'{run.source}: "{text}"')
+        for row in np.argsort(-sims[0], kind="stable")[: args.top]:
+            print(f"  {sims[0, row]:.3f}  {describe(nodes[int(objects[row])])}")
+    else:
+        anchor = nodes[int(objects[sims[1].argmax()])]
+        rows = of_type([nodes[int(o)].label for o in objects], text, sims[0], args.top)
+        print(f'{run.source}: "{text}" nearest to "{args.near}", {sims[1].max():.3f}  {describe(anchor)}')
+        for node_id, gap, centre in nearest(nodes, anchor.id, [int(objects[r]) for r in rows])[: args.top]:
+            print(f"  {gap:.2f} m apart, {centre:.2f} m between centres  {describe(nodes[node_id])}")

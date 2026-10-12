@@ -99,7 +99,21 @@ uv run --no-sync python run.py --source replica/room_0/00 --mask-source gt    # 
 uv run --no-sync python run.py --source replica/room_0/00 --overwrite graph   # recompute only the graph
 uv run --no-sync python run.py --pose-source vggt                             # VGGT-Omega depth and poses
 uv run --no-sync python -m graph.query --source replica/room_0/00 "striped pillow"   # search a run's graph
+uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --near sofa   # nearest object of a type
+uv run --no-sync python -m graph.edges --source replica/room_0/00                      # list the graph's edges
 ```
+
+`graph/edges.py` connects the nodes by their 3D boxes, computed on the fly like the nodes:
+
+- **on**: one object rests on or in another, such as a cushion on a sofa or a vase on a cabinet. Most of its footprint
+  lies over the other's, its bottom is above the other's bottom and near its top, and it is the smaller one.
+- **near**: the boxes are at most 25 cm apart.
+
+Walls, floors, ceilings and nodes with a box side over 3 m get no edges, since they touch everything. On room_0 the
+84 nodes get 31 "on" and 115 "near" edges. `graph.query` lists each result's "on" and "under" edges, which tells
+similar objects apart, and `--near` ranks the objects of a type by distance to the best match of another text: the
+smallest gap between the boxes, then the closest centres. The type is the SAM label when the text is one of the
+prompts, since SigLIP's scores for a type are close together, and otherwise SigLIP's `--top` best matches.
 
 `--overwrite` with no stage names recomputes every stage, SAM included.
 
