@@ -14,10 +14,12 @@ dependencies = [
     "numpy>=2.5.3",
     "pycocotools>=2.0.11",
     "rerun-sdk[notebook]>=0.38.1",
+    "scipy>=1.18.1",
     "torch>=2.11.0",
     "torchcodec>=0.11.0",
     "torchvision>=0.26.0",
     "transformers>=5.17.0",
+    "vggt-omega",
 ]
 
 [build-system]
@@ -33,6 +35,8 @@ cu130 = ["torch>=2.11.0", "torchvision>=0.26.0", "torchcodec>=0.12.0"]
 
 [tool.uv]
 conflicts = [[{ extra = "cu126" }, { extra = "cu130" }]]
+# vggt-omega pins numpy<2, but its inference code runs on numpy 2
+override-dependencies = ["numpy>=2.5.3"]
 
 [tool.uv.sources]
 torch = [
@@ -47,6 +51,7 @@ torchcodec = [
     { index = "pytorch-cu126", extra = "cu126" },
     { index = "pytorch-cu130", extra = "cu130" },
 ]
+vggt-omega = { git = "https://github.com/facebookresearch/vggt-omega", rev = "48b23c8ce72c9a8fcf987f0d7f43d8e4870759f6" }
 
 [[tool.uv.index]]
 name = "pytorch-cu130"

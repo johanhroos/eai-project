@@ -29,3 +29,13 @@ def crop_bbox(image, bbox, padding=0.1):
 def crop_bboxes(image, bboxes, padding=0.1):
     """Crop multiple padded bounding boxes."""
     return [crop_bbox(image, bbox, padding) for bbox in bboxes]
+
+
+def square_bbox(bbox, image_shape):
+    """Grow an [x1, y1, x2, y2] box to a square around its centre, shifted to stay in the image where it fits."""
+    x1, y1, x2, y2 = bbox
+    height, width = image_shape[:2]
+    side = min(max(x2 - x1, y2 - y1), width, height)
+    x1 = min(max(0, (x1 + x2 - side) // 2), width - side)
+    y1 = min(max(0, (y1 + y2 - side) // 2), height - side)
+    return x1, y1, x1 + side, y1 + side

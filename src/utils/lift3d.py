@@ -9,36 +9,58 @@ Replica objects never move, so "hidden" means "not visible", either out of the f
 
 import numpy as np
 import pycocotools.mask as mask_utils
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from scipy.ndimage import binary_erosion
 
-from utils import replica
+from utils import footage, replica
 # from utils.events import extract_events
 # from utils.geometry import backproject, mask_to_box, robust_filter
-from utils.schema import Boxes, Events, ObjectBoxes, Run
+from utils.schema import Boxes, Events, Geometry, ObjectBoxes, Run, load_stage
+
+
+POINTS_PER_MASK = 256  # kept by compute_boxes, so that an object's box can be fit to all its views' points
 
 
 def geometry_source(run: Run):
     """Returns get(frame) -> (depth (H, W) m, K (3, 3), c2w (4, 4)) for the run's pose_source.
 
-    pose_source "vggt" plugs in here: it must supply depth, intrinsics and poses with this same signature.
+    "gt" reads Replica's depth and poses. "vggt" reads the vggt stage (models/vggt.py): the model's depth, upsampled
+    to the image size, and its cameras, both in metres with z up through the stage's Sim(3). It runs on any source.
     """
-    scene, seq = replica.parse_source(run.source)
-    if run.pose_source != "gt":
-        raise NotImplementedError(f"pose_source {run.pose_source!r}: depth, K and poses come from the VGGT stage")
-    poses = replica.load_poses(scene, seq)
-    return lambda i: (replica.load_depth(scene, seq, i), replica.K, poses[i])
+    if run.pose_source == "gt":
+        scene, seq = replica.parse_source(run.source)
+        poses = replica.load_poses(scene, seq)
+        return lambda i: (replica.load_depth(scene, seq, i), replica.K, poses[i])
+    if run.pose_source != "vggt":
+        raise ValueError(f"unknown pose_source {run.pose_source!r}")
+    from models.vggt import upsample, world_from_camera  # imports VGGT-Omega only for runs that use it
+
+    geometry = load_stage(run.stage_dir("vggt"), Geometry)
+    row = {int(f): k for k, f in enumerate(geometry.frame)}
+    size = footage.image_size(run)
+
+    def get(i):
+        k = row[i]
+        depth = upsample(geometry.depth[k], size) * geometry.scale
+        return depth, geometry.intrinsics[k].astype(np.float64), world_from_camera(geometry, k)
+
+    return get
 
 
 def compute_boxes(run: Run, masks) -> Boxes:
-    """One 3D box per mask. Rows with too little valid depth get NaN and n_points 0."""
+    """One 3D box per mask, with a sample of POINTS_PER_MASK of its points.
+
+    Rows with too little valid depth get NaN and n_points 0.
+    """
     get = geometry_source(run)
+    rng = np.random.default_rng(0)
     n = len(masks.frame)
     box_min = np.full((n, 3), np.nan, np.float32)
     box_max = np.full((n, 3), np.nan, np.float32)
     n_points = np.zeros(n, np.int32)
+    points = np.full((n, POINTS_PER_MASK, 3), np.nan, np.float16)
     for frame in np.unique(masks.frame): # process all masks per frame together (shared frame info)
         rows = np.nonzero(masks.frame == frame)[0]
         depth, K, c2w = get(int(frame))
@@ -49,7 +71,9 @@ def compute_boxes(run: Run, masks) -> Boxes:
             box = mask_to_box(depth, K, c2w, stack[:, :, k])
             if box is not None:
                 box_min[r], box_max[r], n_points[r] = box.min, box.max, box.n_points
-    return Boxes(box_min, box_max, n_points)
+                keep = rng.choice(box.n_points, min(box.n_points, POINTS_PER_MASK), replace=False)
+                points[r, : len(keep)] = box.points[keep]
+    return Boxes(box_min, box_max, n_points, points)
 
 def rle_area(rles: list[dict], chunk=255) -> np.ndarray:
     """Pixel count of each RLE mask. pycocotools.mask.area fails on NumPy 2 for more than 255 masks at once."""
@@ -79,9 +103,9 @@ def compute_events(run: Run) -> Events:
 
 
 def compute_gt_boxes(run: Run, sample_per_frame=2000, seed=0) -> ObjectBoxes:
-    """Fuse each object's GT points over all frames and take a robust box."""
+    """Fuse each object's GT points over all frames and take a robust box, always from GT depth and poses."""
     scene, seq = replica.parse_source(run.source)
-    get = geometry_source(run)
+    get = geometry_source(replace(run, pose_source="gt"))  # the stage is shared by every pose_source
     rng = np.random.default_rng(seed)
     chunks: dict[int, list] = {}
     for i in replica.frame_numbers(run.stride):
@@ -140,6 +164,7 @@ class Box3D:
     min: np.ndarray  # (3,)
     max: np.ndarray  # (3,)
     n_points: int
+    points: np.ndarray | None = None  # (n_points, 3), the points the box is drawn around
 
     @property
     def center(self):
@@ -164,7 +189,7 @@ def mask_to_box(depth, K, c2w, mask, erode_px=2, min_points=50, mad_scale=3.0, m
     pts = robust_filter(pts, mad_scale)
     if len(pts) < min_points:
         return None
-    return Box3D(pts.min(0), pts.max(0), len(pts))
+    return Box3D(pts.min(0), pts.max(0), len(pts), pts)
 
 
 def box_iou_3d(a: Box3D, b: Box3D) -> float:

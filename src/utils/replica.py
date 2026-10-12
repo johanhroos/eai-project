@@ -23,6 +23,8 @@ WIDTH, HEIGHT = 1200, 680
 K = np.array([[600.0, 0.0, 599.5], [0.0, 600.0, 339.5], [0.0, 0.0, 1.0]])
 # Replica classes that name no kind of object (unlabelled, catch-all or blurred-out), so make no sense as a text prompt
 NON_OBJECTS = {"undefined", "non-plane", "anonymize_picture", "anonymize_text"}
+# Left out of the evaluation and the views: nothing to re-identify, or never prompted
+IGNORE_CLASSES = NON_OBJECTS | {"wall", "floor", "ceiling"}
 
 
 @dataclass
@@ -76,6 +78,17 @@ def load_objects(scene: str) -> dict[int, ReplicaObject]:
         for sample in json.load(f)["dataset"]["samples"]:
             objects[sample["object_id"]].labels = sample["labels"]["image_attributes"]
     return objects
+
+
+def load_queries(scene: str, level: str = "level0") -> dict[str, list[int]]:
+    """OpenLex3D text queries of the scene and the object IDs each one describes.
+
+    level0 queries name an object (its synonyms, such as "throw pillow"); level1 add a pattern, material or picture
+    seen on it, such as "stripe pillow" or "wood table".
+    """
+    scene_dir = DATA_DIR / "gt_openlex3d" / "replica" / scene.replace("_", "")
+    with (scene_dir / "gt_categories_query_to_object_mapping_all.json").open() as f:
+        return json.load(f)[level]
 
 
 def class_names(objects: dict[int, ReplicaObject], promptable: bool = False) -> list[str]:

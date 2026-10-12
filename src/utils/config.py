@@ -5,9 +5,14 @@ OUTPUT_DIR = ROOT_DIR / "outputs"
 DATA_DIR = ROOT_DIR / "data"
 
 STAGE_KEYS = {
-    "masks": ("mask_source",),
-    "features": ("mask_source",),
-    "boxes": ("mask_source", "pose_source"),
+    "masks": ("mask_source", "vocab"),
+    "features": ("mask_source", "vocab"),
+    "siglip": ("mask_source", "vocab"),
+    "boxes": ("mask_source", "vocab", "pose_source"),
+    "graph": ("mask_source", "vocab", "pose_source"),
+    "eval": ("mask_source", "vocab", "pose_source"),
     "events": (),
+    "vggt": (),
+    "frames": (),
     "gt_boxes": (),
 }

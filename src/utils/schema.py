@@ -27,9 +27,10 @@ class Run:
     stride: int
     mask_source: str  # "sam3" | "gt"
     pose_source: str  # "gt" | "vggt"
+    vocab: str = ""  # name of the SAM prompt list given with run.py --vocab, "" for the source's default
 
     def stage_dir(self, stage: str) -> Path:
-        tag = "_".join(getattr(self, k) for k in STAGE_KEYS[stage])
+        tag = "_".join(getattr(self, k) for k in STAGE_KEYS[stage] if getattr(self, k))
         return OUTPUT_DIR / self.source / f"stride{self.stride}" / tag / stage
 
     def done(self, stage: str) -> bool:
@@ -38,13 +39,23 @@ class Run:
 
 @dataclass
 class Features:
-    dino: np.ndarray  # (N, D) float16, L2-normalized
-    siglip: np.ndarray  # (N, D) float16, L2-normalized image embedding
+    """Appearance embedding of every mask: row i belongs to mask i of the masks stage."""
+
+    dino: np.ndarray  # (N, D) float16, L2-normalized, zero for an empty mask
 
     def __post_init__(self):
         n = len(self.dino)
         _check("dino", self.dino, np.float16, (n, None))
-        _check("siglip", self.siglip, np.float16, (n, None))
+
+
+@dataclass
+class TextAligned:
+    """SigLIP image embedding of every mask, comparable with SigLIP text embeddings: row i belongs to mask i."""
+
+    siglip: np.ndarray  # (N, D) float16, L2-normalized, zero for an empty mask
+
+    def __post_init__(self):
+        _check("siglip", self.siglip, np.float16, (len(self.siglip), None))
 
 
 @dataclass
@@ -86,6 +97,65 @@ def check_aligned(run: Run, stage: str) -> None:
         raise ValueError(f"{stage} has {n} rows, masks has {n_masks}")
 
 @dataclass
+class Graph:
+    """Object node of every mask: row i belongs to mask i of the masks stage. All masks of a SAM track share a node."""
+
+    node: np.ndarray  # (N,) int32, node ID: 0, 1, ... in order of first appearance
+
+    def __post_init__(self):
+        _check("node", self.node, np.int32, (len(self.node),))
+
+
+@dataclass
+class Frames:
+    """The frames of a phone run: every stride-th frame of its videos, saved as images next to this stage's arrays.
+
+    A run of several videos numbers their frames one after the other, as if the videos were joined.
+    """
+
+    frame: np.ndarray  # (F,) int32, frame numbers
+    height: int  # of the saved images, after rotation and downscaling
+    width: int
+    fps: float  # of the first video
+    clip: np.ndarray | None = None  # (F,) int16, which video each frame is from (None: one video)
+    clips: list[str] | None = None  # the videos' names, in order
+
+    def __post_init__(self):
+        _check("frame", self.frame, np.int32, (len(self.frame),))
+        if self.clip is not None:
+            _check("clip", self.clip, np.int16, (len(self.frame),))
+
+
+@dataclass
+class Geometry:
+    """Depth and camera of every frame of a run from VGGT-Omega, in the model's units and world frame (models/vggt.py).
+
+    sim3 maps that world frame to one in metres with z up, so its scale also converts depth and translations to metres.
+    """
+
+    frame: np.ndarray  # (F,) int32, frame numbers
+    depth: np.ndarray  # (F, h, w) float16, z-depth at the model's input resolution, model units
+    conf: np.ndarray  # (F, h, w) float16, confidence of the depth: higher is better
+    intrinsics: np.ndarray  # (F, 3, 3) float32, for the full-resolution image
+    cam_from_world: np.ndarray  # (F, 3, 4) float32, OpenCV camera, model units
+    sim3: np.ndarray  # (4, 4) float32, [s R | t]: model world point to aligned world point in metres
+
+    def __post_init__(self):
+        n = len(self.frame)
+        _check("frame", self.frame, np.int32, (n,))
+        _check("depth", self.depth, np.float16, (n, None, None))
+        _check("conf", self.conf, np.float16, self.depth.shape)
+        _check("intrinsics", self.intrinsics, np.float32, (n, 3, 3))
+        _check("cam_from_world", self.cam_from_world, np.float32, (n, 3, 4))
+        _check("sim3", self.sim3, np.float32, (4, 4))
+
+    @property
+    def scale(self) -> float:
+        """Metres per model unit."""
+        return float(np.linalg.norm(self.sim3[:3, 0]))
+
+
+@dataclass
 class Events:
     """Ground-truth hide and revisit events, one row per event, in frame order. Not aligned with the masks."""
 
@@ -111,12 +181,15 @@ class Boxes:
     box_min: np.ndarray  # (N, 3) float32
     box_max: np.ndarray  # (N, 3) float32
     n_points: np.ndarray  # (N,) int32, depth points left after outlier removal
+    points: np.ndarray | None = None  # (N, P, 3) float16, a random sample of those points, NaN-padded
 
     def __post_init__(self):
         n = len(self.box_min)
         _check("box_min", self.box_min, np.float32, (n, 3))
         _check("box_max", self.box_max, np.float32, (n, 3))
         _check("n_points", self.n_points, np.int32, (n,))
+        if self.points is not None:
+            _check("points", self.points, np.float16, (n, None, 3))
 
 @dataclass
 class ObjectBoxes:

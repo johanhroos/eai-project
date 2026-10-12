@@ -1,5 +1,6 @@
 """Extract masks from a video with SAM 3, prompted by the classes you want to segment."""
 
+from dataclasses import replace
 from functools import cache
 
 import numpy as np
@@ -72,6 +73,35 @@ def segment(
         sam_id=np.array(sam_id, dtype=np.int32),
         score=np.array(score, dtype=np.float32),
         rle=rle,
+    )
+
+
+def segment_clips(
+    frames: list[np.ndarray],
+    frame_numbers: list[int],
+    clip: np.ndarray,
+    prompts: list[str],
+    processor: Sam3VideoProcessor,
+    model: Sam3VideoModel,
+) -> Masks:
+    """Track each video of a run on its own with segment, and make the SAM IDs unique across them.
+
+    clip gives the video of every frame (footage.clip_index). Tracking across the cut between two videos would carry an
+    ID over to whatever object is at the same place in the next video's first frame; linking objects across videos is
+    the graph's job.
+    """
+    parts, offset = [], 0
+    for k in np.unique(clip):
+        sel = np.flatnonzero(clip == k).tolist()
+        part = segment([frames[i] for i in sel], [frame_numbers[i] for i in sel], prompts, processor, model)
+        parts.append(replace(part, sam_id=part.sam_id + offset))
+        offset += int(part.sam_id.max()) + 1 if len(part.sam_id) else 0
+    return Masks(
+        frame=np.concatenate([m.frame for m in parts]),
+        prompt=np.concatenate([m.prompt for m in parts]),
+        sam_id=np.concatenate([m.sam_id for m in parts]),
+        score=np.concatenate([m.score for m in parts]),
+        rle=[r for m in parts for r in m.rle],
     )
 
 
