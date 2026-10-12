@@ -3,8 +3,8 @@
 Replica runs are scored against the ground truth at the end. Phone runs (--source phone/<name> for a video
 data/phone/<name>.<ext>) have no ground truth: they use VGGT-Omega's poses and stop after the graph.
 
---association also builds Magnus's persistent association graph (graph/pipeline.py) as its own stage next to the
-graph, and scores it as a third row. Without it, the graph stage and the scores are as before.
+The graph stage (graph/pipeline.py) takes the masks one frame at a time and joins each to the object in memory it
+matches by DINO appearance and location (configs/association.json), or makes it a new object.
 """
 
 import argparse
@@ -15,7 +15,8 @@ import numpy as np
 import torch
 
 import evaluate
-from graph import graph, query
+from graph import pipeline
+from graph.association import AssociationConfig
 from models import dino, sam, siglip, vggt
 from utils import footage, lift3d, replica, vocab
 from utils.schema import (
@@ -32,11 +33,10 @@ from utils.schema import (
     save_stage,
 )
 
-STAGES = ["frames", "masks", "features", "siglip", "vggt", "boxes", "graph", "association", "events", "gt_boxes"]
+STAGES = ["frames", "masks", "features", "siglip", "vggt", "boxes", "graph", "events", "gt_boxes"]
 # A stage is recomputed when one of these was saved after it, such as boxes after a new vggt stage
 UPSTREAM = {"masks": ["frames"], "features": ["masks"], "siglip": ["masks"], "boxes": ["masks", "vggt"]}
-UPSTREAM["graph"] = ["masks", "features", "boxes"]
-UPSTREAM["association"] = ["masks", "features", "siglip", "boxes"]
+UPSTREAM["graph"] = ["masks", "features", "siglip", "boxes"]
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument(
@@ -48,17 +48,14 @@ parser.add_argument(
 parser.add_argument("--stride", type=int, default=20)
 parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
 parser.add_argument(
-    "--association",
-    action="store_true",
-    help="also build the persistent association graph (graph/pipeline.py) and score it next to the graph",
-)
-parser.add_argument(
-    "--association-config", help="JSON of graph.association.AssociationConfig (default: configs/association.json)"
+    "--association-config",
+    default=str(pipeline.DEFAULT_CONFIG),
+    help="JSON of graph.association.AssociationConfig, the graph's matching parameters",
 )
 parser.add_argument(
     "--graph-only",
     action="store_true",
-    help="only rebuild the association stage from the cached stages, without loading any model",
+    help="only rebuild the graph from the cached stages, without loading any model or scoring it",
 )
 parser.add_argument("--skip-text-eval", action="store_true", help="score identities without loading the text encoder")
 parser.add_argument(
@@ -76,15 +73,10 @@ parser.add_argument(
     help="recompute these stages even if they are cached, or every stage when none is named",
 )
 args = parser.parse_args()
-association_config = None
-if args.association or args.graph_only:
-    from graph import pipeline
-    from graph.association import AssociationConfig
-
-    try:
-        association_config = AssociationConfig.from_json(args.association_config or pipeline.DEFAULT_CONFIG)
-    except (ValueError, TypeError, OSError) as e:
-        parser.error(f"invalid association configuration: {e}")
+try:
+    association_config = AssociationConfig.from_json(args.association_config)
+except (ValueError, TypeError, OSError) as e:
+    parser.error(f"invalid association configuration: {e}")
 if args.stride < 1:
     parser.error("stride must be positive")
 try:
@@ -105,10 +97,8 @@ def stale(run: Run, stage: str, params: dict | None = None) -> bool:
         return True
     if not run.done(stage):
         return True
-    memory = run.stage_dir(stage) / "memory" / "metadata.json"
-    if stage == "association" and (
-        not memory.exists()
-        or any(not (run.stage_dir(stage) / f"{n}.json").exists() for n in ("edges", "matches", "history"))
+    if stage == "graph" and not all(
+        (run.stage_dir(stage) / f).exists() for f in ("memory/metadata.json", "matches.json", "history.json")
     ):
         return True
     metadata = run.stage_dir(stage) / "metadata.json"
@@ -163,7 +153,7 @@ for run in runs:
     source = run.source
     if args.graph_only:
         result = pipeline.rebuild(run, association_config)
-        print(f"{source}: saved {len(result.memory.nodes)} persistent objects to {run.stage_dir('association')}")
+        print(f"{source}: saved {len(result.memory.nodes)} objects to {run.stage_dir('graph')}")
         continue
     if not footage.is_replica(run) and stale(run, "frames"):
         footage.extract(run)
@@ -210,21 +200,15 @@ for run in runs:
         print(f"Saved boxes to {run.stage_dir('boxes')}")
     boxes = load_stage(run.stage_dir("boxes"), Boxes)
 
-    if stale(run, "graph", graph.PARAMS):
-        save_stage(run.stage_dir("graph"), graph.build(masks, boxes, features), graph.PARAMS)
-        check_aligned(run, "graph")
-        print(f"Saved graph to {run.stage_dir('graph')}")
-
-    # Magnus's persistent association graph, only with --association: its own stage, so the graph above is unchanged
-    if args.association and stale(run, "association", association_config.metadata()):
+    if stale(run, "graph", association_config.metadata()):
         names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
         embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
         built = pipeline.replay(
             masks, boxes, features, embeddings, names, association_config, frames=footage.frame_numbers(run)
         )
-        pipeline.save_result(run.stage_dir("association"), built)
-        check_aligned(run, "association")
-        print(f"Saved association graph to {run.stage_dir('association')}")
+        pipeline.save_result(run.stage_dir("graph"), built)
+        check_aligned(run, "graph")
+        print(f"Saved graph to {run.stage_dir('graph')}: {len(built.memory.nodes)} objects")
 
     if not footage.is_replica(run):
         node = load_stage(run.stage_dir("graph"), Graph).node
@@ -259,26 +243,18 @@ for run in runs:
         "tracks, no graph": masks.sam_id,
         "graph": load_stage(run.stage_dir("graph"), Graph).node,
     }
-    if args.association:
-        predictions["association"] = load_stage(run.stage_dir("association"), Graph).node
     results[source] = {name: evaluate.evaluate(masks, ids, gt, events, objects) for name, ids in predictions.items()}
     embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
-    # The association graph is searched by the SigLIP means its memory stores, as graph.query --association does
-    vectors = {}
-    if args.association:
-        vectors["association"] = query.memory_embeddings(pipeline.load_memory(run.stage_dir("association") / "memory"))
     for level in () if args.skip_text_eval else ("level0", "level1"):
         targets = replica.load_queries(replica.parse_source(run.source)[0], level)
         text = siglip.load_encoder().encode_text(list(targets)).cpu().numpy()
         for name, ids in predictions.items():
-            scores = evaluate.queries(masks, ids, gt, embeddings, targets, text, object_vectors=vectors.get(name))
+            scores = evaluate.queries(masks, ids, gt, embeddings, targets, text)
             results[source][name].update({f"{level}_{k}": v for k, v in scores.items()})
     names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
     gt_boxes = load_stage(run.stage_dir("gt_boxes"), ObjectBoxes)
     for name, ids in predictions.items():
-        results[source][name].update(
-            evaluate.nearest_objects(masks, ids, gt, boxes, features, names, gt_boxes, objects)
-        )
+        results[source][name].update(evaluate.nearest_objects(masks, ids, gt, boxes, names, gt_boxes, objects))
     run.stage_dir("eval").mkdir(parents=True, exist_ok=True)
     (run.stage_dir("eval") / "metrics.json").write_text(json.dumps(results[source], indent=2))
 

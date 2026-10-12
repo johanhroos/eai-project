@@ -32,7 +32,7 @@ from graph.edges import build_edges
 from graph.node import build_nodes
 from models.sam import mask_boxes
 from utils import footage, lift3d, replica
-from utils.schema import Boxes, Features, Graph, Masks, Run, load_stage
+from utils.schema import Boxes, Graph, Masks, Run, load_stage
 
 FUSED_FRAMES = 40  # frames whose depth makes up the point cloud
 PIXEL_STEP = 2  # every PIXEL_STEP-th pixel in both directions
@@ -68,7 +68,7 @@ def log_map(run: Run) -> None:
     vocab = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
     graph = load_stage(run.stage_dir("graph"), Graph)
     boxes = load_stage(run.stage_dir("boxes"), Boxes)
-    nodes = build_nodes(masks, boxes, load_stage(run.stage_dir("features"), Features), graph, vocab)
+    nodes = build_nodes(masks, boxes, graph, vocab)
     edges = build_edges(nodes)
     nodes = [n for n in nodes if n.label not in replica.IGNORE_CLASSES]  # walls and floors, as in the evaluation
 

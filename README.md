@@ -79,24 +79,24 @@ as well: request it like SAM 3 and use the same `hf auth login`.
 | `siglip` | `models/siglip.py` | SigLIP 2 embedding per mask, comparable with text: the mean of a square crop around the mask and the same crop greyed outside it |
 | `vggt` | `models/vggt.py` | Only with `--pose-source vggt`: VGGT-Omega depth and cameras for every frame, in metres with z up |
 | `boxes` | `utils/lift3d.py` | World-frame 3D box per mask and 256 of its points, from depth and pose (Replica's, or VGGT-Omega's). An object's box spans its masks' pooled points (`graph/node.py`), leaving out masks far from the rest |
-| `graph` | `graph/graph.py` | Object node per mask: SAM tracks merged into persistent objects. `graph/node.py` gives each node's label, box and embedding |
-| `association` | `graph/association.py`, `graph/pipeline.py` | Only with `--association`: the persistent association graph, an incremental object memory with mask-to-node assignments, match scores, node-count history and nearby spatial edges. Scored as a third row next to the graph |
+| `graph` | `graph/association.py`, `graph/pipeline.py` | Object node per mask, from an object memory that takes the masks one frame at a time and matches them by DINO appearance and location. Also the memory itself, the match scores and the node count over time. `graph/node.py` gives each node's label and box |
 | `events`, `gt_boxes` | `utils/lift3d.py` | Ground truth for the evaluation: when objects leave the view and come back, and one 3D box per object |
 
-The graph merges SAM tracks in two passes (details in the `graph/graph.py` docstring):
-1. Tracks whose masks overlap in most of the frames they share are duplicates (one object found by several prompts).
-   Tracks that hardly ever overlap there are different objects and never end up in one node.
-2. The rest merge when they have the same label and their 3D boxes overlap, or one box lies mostly inside the other
-   (a view of part of the object). This reconnects objects that left the view and came back under a new SAM ID, and
-   links objects across the videos of a multi-video run.
+The graph stage (`graph/pipeline.py`, `graph/association.py`) builds an object memory one frame at a time:
 
-DINO can veto pass-2 merges of tracks that look different (`graph.DINO_SIM`), but it is off: on Replica it changed
-nothing, and across two phone videos it blocked correct links, because the same shoe seen from another side looks
-different. The `features` stage still computes the DINO embeddings.
+1. Masks of one frame that overlap strongly (mask IoU >= 0.6) are one observation: one object found by several prompts.
+2. Each observation is scored against every object in memory with its **DINO appearance** and its **location**:
+   the best DINO cosine against the object's few stored descriptors, and the overlap and centre distance of the 3D
+   boxes. Objects more than 1 m away aren't candidates. It joins the best object if the score is above the threshold,
+   and otherwise becomes a new object. SAM IDs and labels don't decide it: two SAM IDs on one object end up in one
+   node when DINO and location agree, and an object that leaves the view and comes back keeps its node.
+3. The object's **box grows to the union** of every box it was matched with (the smallest minimum and largest maximum
+   per axis), so it covers the whole space the object fills, also the parts hidden in some views. It never shrinks.
+   It keeps up to four DINO descriptors from different views, and sums its observations' SigLIP embeddings for text
+   search. SigLIP takes no part in matching.
 
-`--association` also builds the persistent association graph (see "Persistent graph" below), which matches
-observations one by one with a score of DINOv3, SigLIP and 3D geometry, in its own `association` stage. The `graph`
-stage and everything built on it (edges, `--near`, the plots) stay the track-merging graph.
+The weights are DINO 0.45 and location 0.40 (normalised to 0.53 and 0.47), and the threshold 0.55 is above each, so a
+match needs both: the same place and the same look (`configs/association.json`, `--association-config` for another).
 
 ```bash
 uv run --no-sync python run.py                                                # SAM 3 masks, every scene
@@ -105,6 +105,7 @@ uv run --no-sync python run.py --source replica/room_0/00 --overwrite graph   # 
 uv run --no-sync python run.py --pose-source vggt                             # VGGT-Omega depth and poses
 uv run --no-sync python -m graph.query --source replica/room_0/00 "striped pillow"   # search a run's graph
 uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --near sofa   # nearest object of a type
+uv run --no-sync python -m graph.query --source replica/room_0/00 --position 3.6 2.5 -0.9   # objects nearest a point
 uv run --no-sync python -m graph.edges --source replica/room_0/00                      # list the graph's edges
 uv run --no-sync python -m graph.plot_edges --source replica/room_0/00                 # eval/edges.png, nodes and edges
 ```
@@ -165,14 +166,13 @@ uv run --no-sync python run.py --source phone/kitchen
 uv run --no-sync python -m graph.query --source phone/kitchen "coffee mug"
 uv run --no-sync python -m utils.video --source phone/kitchen
 uv run --no-sync python -m utils.map_view --source phone/kitchen   # eval/map.rrd for the Rerun viewer
-uv run --no-sync python -m graph.plot --source phone/kitchen       # eval/graph.png, to debug the graph
+uv run --no-sync python -m graph.plot_edges --source phone/kitchen # eval/edges.png, the objects and their edges
 ```
 
 `notebooks/map.ipynb` does all of this for one set of clips at a time: it collects clips sent with Tailscale, runs
 the pipeline with the prompts you set, and shows the map in Rerun (the point cloud, the camera's path and the objects'
-3D boxes), a picture of the graph, the labelled video and a text search. The graph picture (`graph/plot.py`) shows
-when each SAM track is seen, grouped by object, the objects from above, and every merge with its rule and every
-near-miss with what kept the two apart. 
+3D boxes), a picture of the graph from above with its edges (`graph/plot_edges.py`), the labelled video and a text
+search. 
 
 - **Several videos of one place** make one map: `--source phone/IMG_0644+IMG_0645`. SAM tracks each video on its
   own, so no ID carries across the cut, VGGT-Omega reconstructs all their frames in one pass, so they share one 3D
@@ -233,12 +233,8 @@ right when the nearest candidate stands for the answer.
 - **anchor**: share of the queries whose anchor is in the map. **reach**: whose anchor and answer both are, the most
   oracle can get.
 
-On room_0 with SAM 3 masks (716 queries): labels 0.26 for the graph and 0.31 for the raw tracks, oracle 0.40 for both,
-anchor 0.70, reach 0.49. So when both objects are in the map, the boxes give the right answer 82% of the time (0.40 of
-0.49); most misses are objects SAM never segments well (no window or pillar matches a GT object). The graph's labels
-score is lower because a merged node takes the label with the most SAM score over its tracks, so an object merged
-into a node of another label drops out of the candidates. With GT masks all four are 0.94 to 1: the map's boxes come
-from every 20th frame and the GT boxes from all frames, which flips a few near ties.
+With GT masks all four are close to 1, which checks the metric itself; not exactly 1, since the map's boxes come from
+every 20th frame and the GT boxes from all frames, which flips a few near ties.
 
 With `--mask-source gt` the tracks are the GT objects. Their identity row must score IDF1 = 1, which checks the
 evaluation itself, and their query row shows what SigLIP gets from a perfect map.
@@ -254,93 +250,39 @@ uv run --no-sync python -m utils.video --source replica/room_0/00               
 uv run --no-sync python -m utils.video --source replica/room_0/00 --panels tracks graph gt   # add the ground truth
 ```
 
-### Persistent graph: configuration, rebuilds and visualization
+### Graph: configuration, rebuilds and tuning
 
-The persistent association graph is opt-in: `run.py --association` builds it in the `association` stage, next to
-the `graph` stage, and the score tables get an `association` row. The commands below use that stage.
+`configs/association.json` holds every matching parameter. Weights are normalised over the enabled cues
+(`enable_dino`, `enable_geometry`), and a missing cue scores zero without redistributing its weight. Geometry is
+`geometry_iou_weight * IoU + (1 - geometry_iou_weight) * exp(-centre distance / center_distance_scale)` with the
+unpadded `lift3d.box_iou_3d`. A match needs a score strictly above the threshold; in each frame the strongest pairs
+are assigned first, one observation per object. `require_same_label` adds a same-label rule, off by default since
+prompt labels change between views.
 
-`configs/association.json` centralizes all matching parameters. Edit it or pass another file with
-`--association-config`. `box_weight` is the geometry weight. Raw nonnegative weights are normalized over enabled
-components; at least one enabled weight must be positive. Defaults are DINO 0.45, SigLIP 0.15, geometry 0.40,
-threshold 0.45, four prototypes per modality, a 1 m candidate centre-distance gate, and equal IoU/centre contributions.
-These settings were selected on room_0; they are not validated defaults for other scenes.
-
-- DINO and SigLIP use the maximum cosine against each node's bounded descriptor bank, clipped to [0,1]. Stored
-  descriptors are float16 and normalized again for similarity calculations. Empty, zero, NaN, infinite and
-  incompatible descriptor dimensions are excluded.
-- Geometry uses the existing **unpadded** `lift3d.box_iou_3d`: `geometry_iou_weight * IoU +
-  (1 - geometry_iou_weight) * exp(-centre_distance / center_distance_scale)`.
-- Missing cues contribute **zero**, without redistributing their weights. Thus scores remain on [0,1], and missing
-  evidence cannot artificially inflate a score. Disable a component globally to redistribute its weight instead.
-- The spatial gate applies whenever both boxes are valid, independently of the geometry enable switch. Set
-  `max_candidate_distance` to JSON `null` to disable it. If either box is invalid, spatial gating is unavailable.
-- Matching requires score **strictly greater** than threshold. Greedy assignment accepts the strongest frame-wide
-  pair first, then tries remaining available pairs; it is one-to-one after duplicate-mask consolidation.
-- Same-label compatibility is configurable and off by default: prompt labels change across views. SAM IDs are
-  retained in diagnostic traces but never determine persistent IDs.
-- Boxes expand gradually on overlapping accepted observations and do not shrink from partial views. Disjoint
-  appearance matches do not move a remembered box. This static-object policy can preserve erroneous extents.
-
-Run one real Replica scene with GT depth and poses:
+Changing only the config recomputes only the graph. To rebuild it from the cached stages without loading any model
+or scoring it:
 
 ```bash
-uv run --no-sync python run.py --source replica/room_0/00 --stride 20 --pose-source gt --association
+uv run --no-sync python run.py --source replica/room_0/00 --graph-only --association-config configs/association.json
 ```
 
-SAM masks, DINO features, SigLIP descriptors and boxes are cached separately. Changing only the association config
-invalidates only the association stage. To skip all inference **and evaluation** when tuning:
+The graph stage directory holds the node per mask (`arrays.npz`, read by the evaluation, video and plots), `memory/`
+(the compact object memory: IDs, labels, boxes, DINO descriptors, SigLIP sums, first and last frame;
+`graph.pipeline.load_memory()` restores it and can go on with later frames), and `matches.json` and `history.json` (each
+observation's best candidate and scores, and the node count per frame, for inspection). `--skip-text-eval` scores
+identities without loading the text encoder.
+
+`notebooks/visualize_graph.ipynb` (`graph/visualize.py`) is for tuning: interactive Plotly boxes and edges, RGB/SAM
+overlays, frame and object selectors, the score of each match, and the node count over time. Changing a frame replays
+the memory up to it. Adjust the weights, threshold, cues and geometry controls, click **Rebuild from cache** (CPU only,
+no models), and **Save graph + config** to write the graph and a reusable config. On a headless cluster:
 
 ```bash
-uv run --no-sync python run.py --source replica/room_0/00 --pose-source gt --graph-only
-uv run --no-sync python run.py --source replica/room_0/00 --pose-source gt --graph-only --association-config configs/association.json
-PYTHONPATH=src:. uv run --no-sync python -m graph.validation --source replica/room_0/00
-```
-
-The equivalent lightweight entry point is `python -m graph.pipeline`. Cached stages must be row-aligned and newer
-than their masks. Evaluation metrics are refreshed by a full cached `run.py` run or `graph.validation`, not by
-`--graph-only`. `--skip-text-eval` avoids loading a text encoder during an identity-only full run.
-
-The association stage directory contains:
-
-- `arrays.npz`, `other.json`, `metadata.json`: row-aligned observation-to-object assignments, compatible with existing
-  evaluation and video tools.
-- `memory/`: compact node snapshot: stable IDs, labels, 3D boxes, bounded DINO/SigLIP banks, SigLIP retrieval sums,
-  timestamps and counts. `graph.pipeline.load_memory()` restores it without observation caches and can continue
-  processing later frames with the same world coordinates. IDs persist across reloads, but parameter rebuilds start
-  a fresh memory, so IDs need not correspond across configurations.
-- `edges.json`: undirected `near` edges using box-surface separation and directed `above` edges for vertically
-  separated boxes with horizontal overlap. No support/contact claims are made. Assumes z-up coordinates.
-- `matches.json`, `history.json`: optional inspection history separate from compact robot memory. Match traces show
-  the accepted candidate, or best compatible rejected candidate when a new node is created, before node updates.
-
-With `--association`, the text-query command reads the compact memory descriptors instead of the graph; nearest-object
-queries to a position require no encoder:
-
-```bash
-uv run --no-sync python -m graph.query --source replica/room_0/00 --association "striped pillow"
-uv run --no-sync python -m graph.query --source replica/room_0/00 --position 0 0 0 --top 5
-```
-
-For interactive inline inspection on a headless cluster:
-
-```bash
-uv run --no-sync python -m ipykernel install --user --name eai-project --display-name "EAI project"
 uv run --no-sync jupyter lab --no-browser --ip=127.0.0.1
 ```
-
-Forward the Jupyter port to your machine using your normal SSH setup, open `notebooks/visualize_graph.ipynb`, and
-select the EAI project kernel. Set the source/stride in its setup cell. The notebook displays interactive Plotly boxes,
-spatial edges, RGB/SAM overlays, frame and object selectors, pre-update score tables, and node counts over time.
-Changing a frame replays the memory prefix, so geometry is shown as it existed then, including unseen objects.
-Object selection shows up to six representative frames across the full sequence. Adjust weights, threshold,
-modality switches, descriptor-bank size and geometry controls, then click **Rebuild from cache**. It runs on CPU
-without loading models. Click **Save graph + config** to write graph artifacts and a reusable config; descriptors
-and geometry remain untouched. Adjust less common parameters directly in the JSON file.
 
 Tests:
 
 ```bash
 PYTHONPATH=src uv run --no-sync python -m unittest discover -s tests -v
 ```
-
-Actual room_0 validation and known limitations are recorded in `docs/persistent_graph_validation.md`.

@@ -8,7 +8,7 @@ import numpy as np
 import pycocotools.mask as mask_utils
 
 from graph.association import AssociationConfig, ObjectMemory, ObjectNode, Observation, normalized, valid_box
-from graph.node import fused_box
+from graph.node import union_box
 from utils.lift3d import Box3D
 from utils.schema import Boxes, Features, Graph, Masks, PersistentObjects, Run, TextAligned, load_stage, save_stage
 
@@ -76,7 +76,7 @@ def replay(
         groups = observation_groups(masks, rows, memory.config.duplicate_iou)
         observations = []
         for group in groups:
-            lo, hi = fused_box(boxes, group)
+            lo, hi = union_box(boxes, group)
             points = int(boxes.n_points[group].max())
             label_votes = np.bincount(masks.prompt[group], weights=masks.score[group], minlength=len(vocab))
             observations.append(
@@ -108,8 +108,8 @@ def snapshot(memory: ObjectMemory) -> PersistentObjects:
                 data[row, i] = e
         return data
 
-    dino, siglip = bank("descriptors"), bank("siglip_descriptors")
-    sums = np.zeros((n, siglip.shape[2]), np.float32)
+    dino = bank("descriptors")
+    sums = np.zeros((n, memory.siglip_dimension or 0), np.float32)
     lo, hi = np.full((n, 3), np.nan, np.float32), np.full((n, 3), np.nan, np.float32)
     counts = np.zeros(n, np.int64)
     for row, node in enumerate(nodes):
@@ -123,7 +123,6 @@ def snapshot(memory: ObjectMemory) -> PersistentObjects:
         hi,
         counts,
         dino,
-        siglip,
         sums,
         *[
             np.array([getattr(node, name) for node in nodes], np.int64)
@@ -145,13 +144,12 @@ def load_memory(path: Path) -> ObjectMemory:
     memory = ObjectMemory(AssociationConfig(**data.config))
     memory.next_id, memory.last_frame = data.next_id, data.last_frame
     memory.dino_dimension = data.dino.shape[2] or None
-    memory.siglip_dimension = data.siglip.shape[2] or None
+    memory.siglip_dimension = data.siglip_sum.shape[1] or None
     for row, object_id in enumerate(data.object_id):
         node = ObjectNode(int(object_id), data.labels[row])
         if data.n_points[row] > 0:
             node.box = Box3D(data.box_min[row].copy(), data.box_max[row].copy(), int(data.n_points[row]))
         node.descriptors = [e.copy() for e in data.dino[row] if normalized(e) is not None]
-        node.siglip_descriptors = [e.copy() for e in data.siglip[row] if normalized(e) is not None]
         node.siglip_sum = data.siglip_sum[row].copy() if data.siglip_count[row] else None
         for name in ("siglip_count", "first_seen", "last_seen", "observation_count"):
             setattr(node, name, int(getattr(data, name)[row]))
@@ -166,7 +164,7 @@ def save_result(path: Path, result: BuildResult) -> None:
     # Remove completion marker before writing any of the related artifacts.
     (path / "metadata.json").unlink(missing_ok=True)
     save_memory(path / "memory", result.memory)
-    for name, data in (("matches", result.matches), ("history", result.history), ("edges", result.memory.edges())):
+    for name, data in (("matches", result.matches), ("history", result.history)):
         (path / f"{name}.json").write_text(json.dumps(data, indent=2, allow_nan=False))
     save_stage(path, result.graph, result.memory.config.metadata())
 
@@ -191,7 +189,7 @@ def rebuild(run: Run, config: AssociationConfig | None = None, save: bool = True
 
     result = replay(*cached_observations(run), config=config, frames=footage.frame_numbers(run))
     if save:
-        save_result(run.stage_dir("association"), result)
+        save_result(run.stage_dir("graph"), result)
     return result
 
 
@@ -210,9 +208,7 @@ def main():
     args = parser.parse_args()
     run = footage.make_run(args.source, args.stride, args.mask_source, args.pose_source, vocab.tag(args.vocab))
     result = rebuild(run, AssociationConfig.from_json(args.association_config))
-    print(
-        f"Saved {len(result.memory.nodes)} objects and {len(result.memory.edges())} edges to {run.stage_dir('association')}"
-    )
+    print(f"Saved {len(result.memory.nodes)} objects to {run.stage_dir('graph')}")
 
 
 if __name__ == "__main__":

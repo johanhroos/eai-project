@@ -42,38 +42,32 @@ class PipelineTests(unittest.TestCase):
         malformed = Observation(np.array([1, 0, 0]), Box3D([4, 0, 0], [5, 1, 1], 10), siglip=np.array([1, 0, 0]))
         other = memory.associate_frame(1, [malformed])[0]
         self.assertFalse(memory.nodes[other].descriptors)
-        self.assertFalse(memory.nodes[other].siglip_descriptors)
+        self.assertIsNone(memory.nodes[other].siglip)
         with tempfile.TemporaryDirectory() as temporary:
             save_memory(Path(temporary), memory)
             self.assertEqual(len(load_memory(Path(temporary)).nodes), 2)
         invalid = Observation(["invalid"], Box3D(["invalid"] * 3, [1, 1, 1], 10))
         memory.associate_frame(2, [invalid])
 
-    def test_queries_use_compact_memory(self):
-        from graph.query import memory_embeddings, nearest, rank
-
+    def test_siglip_takes_no_part_in_matching(self):
         memory = ObjectMemory()
-        ids = memory.associate_frame(0, [obs(), obs(x=4, siglip=(0, 1))])
-        objects, vectors = memory_embeddings(memory)
-        order, scores = rank(np.array([[1.0, 0.0]]), vectors)
-        self.assertEqual(objects[order[0, 0]], ids[0])
-        self.assertAlmostEqual(scores[0, 0], 1)
-        self.assertEqual(nearest(memory, [4.5, 0.5, 0.5], top=1), [(int(ids[1]), 0.0)])
+        node_id = memory.associate_frame(0, [obs()])[0]
+        self.assertEqual(memory.associate_frame(1, [obs(siglip=(0, 1))])[0], node_id)
+        np.testing.assert_allclose(memory.nodes[node_id].siglip, np.array([1, 1]) / np.sqrt(2), rtol=1e-6)
 
     def test_normalization_switches_and_missing_cues(self):
-        config = AssociationConfig(dino_weight=6, siglip_weight=2, box_weight=2)
-        np.testing.assert_allclose(config.effective_weights, [0.6, 0.2, 0.2])
+        config = AssociationConfig(dino_weight=6, box_weight=2)
+        np.testing.assert_allclose(config.effective_weights, [0.75, 0.25])
         memory = ObjectMemory(config)
         node_id = memory.associate_frame(0, [obs()])[0]
         missing = Observation(None, None, "chair", siglip=np.array([1.0, 0.0]))
-        self.assertAlmostEqual(memory.score(missing, memory.nodes[node_id]), 0.2)
-        disabled = AssociationConfig(enable_siglip=False)
-        self.assertAlmostEqual(sum(disabled.effective_weights), 1)
-        self.assertEqual(disabled.effective_weights[1], 0)
+        self.assertAlmostEqual(memory.score(missing, memory.nodes[node_id]), 0)
+        disabled = AssociationConfig(enable_geometry=False)
+        np.testing.assert_allclose(disabled.effective_weights, [1, 0])
         with self.assertRaises(ValueError):
-            AssociationConfig(enable_dino=False, enable_siglip=False, enable_geometry=False)
-        negative = obs(dino=(-1, 0), siglip=(-1, 0))
-        self.assertAlmostEqual(memory.score(negative, memory.nodes[node_id]), 0.2)
+            AssociationConfig(enable_dino=False, enable_geometry=False)
+        negative = obs(dino=(-1, 0))
+        self.assertAlmostEqual(memory.score(negative, memory.nodes[node_id]), 0.25)
 
     def test_candidate_gate_and_optional_center_distance(self):
         memory = ObjectMemory(AssociationConfig(threshold=0.1, max_candidate_distance=1))
@@ -83,7 +77,6 @@ class PipelineTests(unittest.TestCase):
         center_memory = ObjectMemory(
             AssociationConfig(
                 dino_weight=0,
-                siglip_weight=0,
                 box_weight=1,
                 geometry_iou_weight=0,
                 threshold=0.5,
@@ -128,10 +121,13 @@ class PipelineTests(unittest.TestCase):
 
     def test_edges_and_empty_memory_roundtrip(self):
         memory = ObjectMemory()
-        memory.associate_frame(0, [obs(), obs(x=1.4), obs(x=4)])
-        near = [edge for edge in memory.edges() if edge["relation"] == "near"]
+        memory.associate_frame(0, [obs(), obs(x=1.2), obs(x=4)])
+        from graph.edges import build_edges
+        from graph.visualize import memory_nodes
+
+        near = [edge for edge in build_edges(memory_nodes(memory)) if edge.relation == "near"]
         self.assertEqual(len(near), 1)
-        self.assertAlmostEqual(near[0]["distance"], 0.4)
+        self.assertAlmostEqual(near[0].gap, 0.2, places=5)
         from graph.pipeline import save_memory
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -145,11 +141,9 @@ class PipelineTests(unittest.TestCase):
         memory.associate_frame(1, [invalid])
         node = memory.nodes[node_id]
         self.assertEqual(node.siglip_count, 1)
-        self.assertEqual(len(node.siglip_descriptors), 1)
         for frame, descriptor in enumerate([(0, 1), (1, 1), (1, -1)], 2):
             memory.associate_frame(frame, [obs(dino=descriptor, siglip=descriptor)])
         self.assertLessEqual(len(node.descriptors), 2)
-        self.assertLessEqual(len(node.siglip_descriptors), 2)
 
 
 if __name__ == "__main__":

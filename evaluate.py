@@ -28,7 +28,7 @@ from scipy.optimize import linear_sum_assignment
 from graph import edges, query
 from graph.node import build_nodes
 from utils import lift3d, replica
-from utils.schema import Boxes, Events, Features, Graph, Masks, ObjectBoxes, TextAligned
+from utils.schema import Boxes, Events, Graph, Masks, ObjectBoxes, TextAligned
 
 MATCH_IOU = 0.5
 REVISIT_WINDOW = 100  # raw frames to look for a match before the object leaves and after it comes back
@@ -130,14 +130,11 @@ def queries(
     emb: TextAligned,
     targets: dict[str, list[int]],
     text_emb: np.ndarray,
-    object_vectors: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> dict:
     """How well the objects in ids are found by text: every query ranks all of them (graph.query).
 
     targets maps each query to the GT objects it describes (replica.load_queries) and text_emb holds the queries'
-    embeddings in the same order. object_vectors optionally supplies saved node descriptors instead of reconstructing
-    them from observation caches.
-    Queries whose objects are never seen in the run (lift3d.MIN_PIXELS) are left out, and
+    embeddings in the same order. Queries whose objects are never seen in the run (lift3d.MIN_PIXELS) are left out, and
     so are those objects. Walking down a query's ranking, an object is a hit when it stands for (owners) a target that
     is not found yet. Anything else counts against it: an object that stands for nothing, for another object, or for a
     target already found, which is a duplicate in the map.
@@ -151,7 +148,7 @@ def queries(
     keep = [i for i, objs in enumerate(targets.values()) if seen & set(objs)]
     sets = [seen & set(list(targets.values())[i]) for i in keep]
     owner = owners(masks, ids, gt)
-    objects, object_emb = query.object_embeddings(masks, emb, ids) if object_vectors is None else object_vectors
+    objects, object_emb = query.object_embeddings(masks, emb, ids)
     order, _ = query.rank(text_emb[keep], object_emb)
     stands_for = np.array([owner.get(int(o), -1) for o in objects])
 
@@ -178,7 +175,6 @@ def nearest_objects(
     ids: np.ndarray,
     gt: Masks,
     boxes: Boxes,
-    features: Features,
     vocab: list[str],
     gt_boxes: ObjectBoxes,
     objects: dict,
@@ -201,7 +197,7 @@ def nearest_objects(
     as on Replica without --vocab.
     """
     _, ids = np.unique(ids, return_inverse=True)  # 0, 1, ..., so node IDs are their indices in nodes
-    nodes = build_nodes(masks, boxes, features, Graph(node=ids.astype(np.int32)), vocab)
+    nodes = build_nodes(masks, boxes, Graph(node=ids.astype(np.int32)), vocab)
     owner = owners(masks, ids, gt)
     stands_for = np.array([owner.get(n.id, -1) for n in nodes])
     node_class = np.array([objects[o].class_name if o >= 0 else "" for o in stands_for.tolist()])

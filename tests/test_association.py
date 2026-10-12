@@ -2,9 +2,10 @@ import unittest
 
 import numpy as np
 
-from graph.association import AssociationConfig, ObjectMemory, Observation, associate_stages
+from graph.association import AssociationConfig, ObjectMemory, Observation
+from graph.pipeline import replay
 from utils.lift3d import Box3D
-from utils.schema import Boxes, Features, Masks
+from utils.schema import Boxes, Features, Masks, TextAligned, encode_rle
 
 
 def observation(descriptor=(1, 0), x=0, label="chair", sam_id=1):
@@ -24,14 +25,14 @@ class AssociationTests(unittest.TestCase):
             np.zeros(2, np.int16),
             np.array([99, 1], np.int32),
             np.ones(2, np.float32),
-            [{"size": [1, 1], "counts": "1"}] * 2,
+            encode_rle(np.ones((2, 4, 4), bool)),
         )
         boxes = Boxes(np.zeros((2, 3), np.float32), np.ones((2, 3), np.float32), np.ones(2, np.int32))
         features = Features(np.array([[1, 0], [1, 0]], np.float16))
-        ids, memory = associate_stages(masks, boxes, features, ["chair"])
-        np.testing.assert_array_equal(ids, [0, 0])
-        self.assertEqual(memory.nodes[0].first_seen, 0)
-        self.assertEqual(memory.nodes[0].last_seen, 10)
+        result = replay(masks, boxes, features, TextAligned(features.dino.copy()), ["chair"])
+        np.testing.assert_array_equal(result.graph.node, [0, 0])
+        self.assertEqual(result.memory.nodes[0].first_seen, 0)
+        self.assertEqual(result.memory.nodes[0].last_seen, 10)
 
     def test_revisit_with_new_sam_id(self):
         memory = ObjectMemory()
@@ -87,6 +88,15 @@ class AssociationTests(unittest.TestCase):
         partial.box.max[:] = 0.5
         self.assertEqual(memory.associate_frame(1, [partial])[0], object_id)
         np.testing.assert_array_equal(memory.nodes[object_id].box.max, [1, 1, 1])
+
+    def test_box_is_union_of_views(self):
+        memory = ObjectMemory()
+        object_id = memory.associate_frame(0, [observation()])[0]
+        # A view that also sees the part behind an occluder: the box grows to cover both views at once
+        wider = observation(x=0.5)
+        self.assertEqual(memory.associate_frame(1, [wider])[0], object_id)
+        np.testing.assert_array_equal(memory.nodes[object_id].box.min, [0, 0, 0])
+        np.testing.assert_array_equal(memory.nodes[object_id].box.max, [1.5, 1, 1])
 
     def test_strict_threshold_and_frame_order(self):
         memory = ObjectMemory(AssociationConfig(threshold=1))

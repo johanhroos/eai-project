@@ -1,8 +1,13 @@
 """Incremental static-object association in a shared metric world frame.
 
-Cosines are clipped to [0, 1]; geometry is in [0, 1]. Enabled nonnegative
-weights are normalized once. Missing cues score zero with no per-pair weight
-renormalization, so a match with less evidence cannot inflate its score.
+Whether an observation is an object already in memory is decided by its DINO appearance and its location only: SAM
+IDs and labels don't decide it. The DINO cosine is clipped to [0, 1] and geometry is in [0, 1]. Enabled nonnegative
+weights are normalized once. Missing cues score zero with no per-pair weight renormalization, so a match with less
+evidence cannot inflate its score.
+
+A node's box is the union of every box it was matched with: the smallest minimum and the largest maximum per axis, so
+it grows to the whole space the object fills as views of its parts come in, also behind occluders, and never shrinks.
+SigLIP takes no part in matching; each node sums its observations' SigLIP embeddings for text search.
 """
 
 import json
@@ -12,30 +17,25 @@ from pathlib import Path
 import numpy as np
 
 from utils.lift3d import Box3D, box_iou_3d
-from utils.schema import Boxes, Features, Masks, TextAligned
 
 
 @dataclass(frozen=True)
 class AssociationConfig:
     dino_weight: float = 0.45
-    siglip_weight: float = 0.15
     box_weight: float = 0.4
     enable_dino: bool = True
-    enable_siglip: bool = True
     enable_geometry: bool = True
-    threshold: float = 0.45
+    threshold: float = 0.55  # above each weight alone (0.53, 0.47): DINO and location must both agree
     max_descriptors: int = 4
     max_candidate_distance: float | None = 1.0  # metres between box centres; None disables gate
     geometry_iou_weight: float = 0.5  # 1 = IoU only; 0 = centre distance only
     center_distance_scale: float = 0.5  # metres; similarity exp(-distance / scale)
     descriptor_duplicate_similarity: float = 0.95
-    geometry_rate: float = 0.2
     require_same_label: bool = False
     duplicate_iou: float = 0.6
-    near_distance: float = 0.75  # minimum box surface separation, metres
 
     def __post_init__(self):
-        weights = (self.dino_weight, self.siglip_weight, self.box_weight)
+        weights = (self.dino_weight, self.box_weight)
         if not all(np.isfinite(w) and w >= 0 for w in weights):
             raise ValueError("weights must be finite and nonnegative")
         if sum(self.effective_weights) <= 0:
@@ -54,29 +54,19 @@ class AssociationConfig:
             or self.max_descriptors < 1
         ):
             raise ValueError("max_descriptors must be a positive integer")
-        if not np.isfinite(self.geometry_rate) or not 0 < self.geometry_rate <= 1:
-            raise ValueError("geometry_rate must be in (0, 1]")
-        for value in (self.center_distance_scale, self.near_distance):
-            if not np.isfinite(value) or value <= 0:
-                raise ValueError("distance scales must be finite and positive")
+        if not np.isfinite(self.center_distance_scale) or self.center_distance_scale <= 0:
+            raise ValueError("center_distance_scale must be finite and positive")
         if self.max_candidate_distance is not None and (
             not np.isfinite(self.max_candidate_distance) or self.max_candidate_distance <= 0
         ):
             raise ValueError("max_candidate_distance must be positive or null")
-        for enabled in (self.enable_dino, self.enable_siglip, self.enable_geometry, self.require_same_label):
+        for enabled in (self.enable_dino, self.enable_geometry, self.require_same_label):
             if not isinstance(enabled, bool):
                 raise ValueError("component switches must be booleans")
 
     @property
-    def effective_weights(self) -> tuple[float, float, float]:
-        raw = np.array(
-            [
-                self.dino_weight if self.enable_dino else 0,
-                self.siglip_weight if self.enable_siglip else 0,
-                self.box_weight if self.enable_geometry else 0,
-            ],
-            float,
-        )
+    def effective_weights(self) -> tuple[float, float]:
+        raw = np.array([self.dino_weight if self.enable_dino else 0, self.box_weight if self.enable_geometry else 0])
         total = raw.sum()
         return tuple((raw / total if total > 0 else raw).tolist())
 
@@ -85,7 +75,7 @@ class AssociationConfig:
         return cls(**json.loads(Path(path).read_text()))
 
     def metadata(self) -> dict:
-        return {"algorithm": "persistent-association-v2", "config": asdict(self)}
+        return {"algorithm": "persistent-association-v3", "config": asdict(self)}
 
 
 def normalized(descriptor: np.ndarray | None) -> np.ndarray | None:
@@ -167,7 +157,6 @@ class ObjectNode:
     first_seen: int = 0
     last_seen: int = 0
     observation_count: int = 0
-    siglip_descriptors: list[np.ndarray] = field(default_factory=list)
     siglip_sum: np.ndarray | None = None
     siglip_count: int = 0
 
@@ -198,7 +187,6 @@ class ObjectMemory:
         compatible = not (c.require_same_label and observation.label and node.label and observation.label != node.label)
         empty = {
             "dino": 0.0,
-            "siglip": 0.0,
             "iou": 0.0,
             "center": 0.0,
             "distance": None,
@@ -218,13 +206,11 @@ class ObjectMemory:
             iou = float(np.clip(iou, 0, 1)) if np.isfinite(iou) else 0.0
             center = float(np.exp(-distance / c.center_distance_scale))
         dino = prototype_similarity(observation.dino, node.descriptors) if c.enable_dino else 0.0
-        siglip = prototype_similarity(observation.siglip, node.siglip_descriptors) if c.enable_siglip else 0.0
         geometry = (c.geometry_iou_weight * iou + (1 - c.geometry_iou_weight) * center) if c.enable_geometry else 0.0
-        wd, ws, wg = self.weights
-        score = float(wd * dino + ws * siglip + wg * geometry)
+        wd, wg = self.weights
+        score = float(wd * dino + wg * geometry)
         return {
             "dino": dino,
-            "siglip": siglip,
             "iou": iou,
             "center": center,
             "distance": distance,
@@ -293,7 +279,6 @@ class ObjectMemory:
             if len(e) != self.siglip_dimension:
                 e = None
         node.descriptors = update_bank(node.descriptors, dino, c)
-        node.siglip_descriptors = update_bank(node.siglip_descriptors, e, c)
         if e is not None and (node.siglip_sum is None or e.shape == node.siglip_sum.shape):
             node.siglip_sum = e.copy() if node.siglip_sum is None else node.siglip_sum + e
             node.siglip_count += 1
@@ -301,61 +286,9 @@ class ObjectMemory:
             incoming = observation.box
             if not valid_box(node.box):
                 node.box = Box3D(incoming.min.copy(), incoming.max.copy(), incoming.n_points)
-            elif box_iou_3d(incoming, node.box) > 0:
-                # Slowly expand, never shrink from a partial view or jump to a
-                # disjoint box on appearance alone. Static objects only.
-                lo = node.box.min + c.geometry_rate * (np.minimum(node.box.min, incoming.min) - node.box.min)
-                hi = node.box.max + c.geometry_rate * (np.maximum(node.box.max, incoming.max) - node.box.max)
+            else:  # the union: the object fills every part any view saw
+                lo, hi = np.minimum(node.box.min, incoming.min), np.maximum(node.box.max, incoming.max)
                 node.box = Box3D(lo, hi, max(node.box.n_points, incoming.n_points))
         node.label = node.label or observation.label
         node.last_seen = int(frame)
         node.observation_count += 1
-
-    def edges(self) -> list[dict]:
-        result = []
-        nodes = [n for n in self.nodes.values() if valid_box(n.box)]
-        for i, a in enumerate(nodes):
-            for b in nodes[i + 1 :]:
-                gap = np.maximum(np.maximum(a.box.min - b.box.max, b.box.min - a.box.max), 0)
-                distance = float(np.linalg.norm(gap))
-                if distance > self.config.near_distance:
-                    continue
-                result.append({"source": a.id, "target": b.id, "relation": "near", "distance": distance})
-                xy = np.minimum(a.box.max[:2], b.box.max[:2]) - np.maximum(a.box.min[:2], b.box.min[:2])
-                if np.all(xy > 0):
-                    if a.box.min[2] >= b.box.max[2]:
-                        result.append({"source": a.id, "target": b.id, "relation": "above", "distance": distance})
-                    elif b.box.min[2] >= a.box.max[2]:
-                        result.append({"source": b.id, "target": a.id, "relation": "above", "distance": distance})
-        return result
-
-
-def associate_stages(
-    masks: Masks,
-    boxes: Boxes,
-    features: Features,
-    vocab: list[str],
-    memory: ObjectMemory | None = None,
-    siglip: TextAligned | None = None,
-) -> tuple[np.ndarray, ObjectMemory]:
-    """Compatibility adapter; richer replay/duplicate handling lives in graph.pipeline."""
-    if len(masks.frame) != len(boxes.n_points) or len(masks.frame) != len(features.dino):
-        raise ValueError("masks, boxes and features must be row-aligned")
-    if siglip is not None and len(siglip.siglip) != len(masks.frame):
-        raise ValueError("SigLIP must be row-aligned")
-    memory = memory if memory is not None else ObjectMemory()
-    ids = np.empty(len(masks.frame), np.int32)
-    for frame in np.unique(masks.frame):
-        rows = np.flatnonzero(masks.frame == frame)
-        observations = [
-            Observation(
-                features.dino[r],
-                Box3D(boxes.box_min[r], boxes.box_max[r], int(boxes.n_points[r])),
-                vocab[int(masks.prompt[r])],
-                int(masks.sam_id[r]),
-                None if siglip is None else siglip.siglip[r],
-            )
-            for r in rows
-        ]
-        ids[rows] = memory.associate_frame(int(frame), observations)
-    return ids, memory
