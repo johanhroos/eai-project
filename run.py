@@ -9,7 +9,12 @@ matches by DINO appearance and location (configs/association.json), or makes it 
 
 import argparse
 import json
+import os
 from dataclasses import replace
+
+# Lets PyTorch reuse reserved but free GPU memory for large blocks: SAM 3's tracker ran out of a 10 GB GPU on phone
+# video with 2.7 GB reserved and unused. Set before torch is imported.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import numpy as np
 import torch
