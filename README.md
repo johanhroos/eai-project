@@ -78,23 +78,89 @@ as well: request it like SAM 3 and use the same `hf auth login`.
 | `features` | `models/dino.py` | DINOv3 embedding per mask: patch tokens of the mask's padded box crop, averaged over the mask |
 | `siglip` | `models/siglip.py` | SigLIP 2 embedding per mask, comparable with text: the mean of a square crop around the mask and the same crop greyed outside it |
 | `vggt` | `models/vggt.py` | Only with `--pose-source vggt`: VGGT-Omega depth and cameras for every frame, in metres with z up |
-| `boxes` | `utils/lift3d.py` | World-frame 3D box per mask and 256 of its points, from depth and pose (Replica's, or VGGT-Omega's). An object's box spans its masks' pooled points (`graph/node.py`), leaving out masks far from the rest |
-| `graph` | `graph/association.py`, `graph/pipeline.py` | Object node per mask, from an object memory that takes the masks one frame at a time and matches them by DINO appearance and location. Also the memory itself, the match scores and the node count over time. `graph/node.py` gives each node's label and box |
+| `boxes` | `utils/lift3d.py` | World-frame 3D box per mask, 256 of its points and the median confidence of its depth (VGGT-Omega's; NaN for Replica's), from depth and pose. `lift3d.reliable` says which masks' depth to trust |
+| `graph` | `graph/association.py`, `graph/pipeline.py` | Object node per mask, from an object memory that takes the masks one frame at a time: a mask joins its SAM track's node, and DINO appearance and location cut tracks that jump and match new ones. Then the nodes are split, labelled and merged as a whole, and only those whose box can be trusted are kept (`graph/refine.py`; the masks of dropped ones get node -1), and each node's box is drawn from every view of it (`graph/shape.py`). Also the memory itself, the match scores, the merges, the node count over time and what refine did (`refine.json`). `graph/node.py` gives each node's label |
 | `events`, `gt_boxes` | `utils/lift3d.py` | Ground truth for the evaluation: when objects leave the view and come back, and one 3D box per object |
 
-The graph stage (`graph/pipeline.py`, `graph/association.py`) builds an object memory one frame at a time:
+The graph stage (`graph/pipeline.py`, `graph/association.py`) builds an object memory one frame at a time. SAM 3's
+tracker is mostly right about which masks are one object, so its tracks are the starting point, and DINO appearance
+and 3D location check them:
 
 1. Masks of one frame that overlap strongly (mask IoU >= 0.6) are one observation: one object found by several prompts.
-2. Each observation is scored against every object in memory with its **DINO appearance** and its **location**:
-   the best DINO cosine against the object's few stored descriptors, and how much of one 3D box lies inside the other
-   and how close their centres are. Objects more than 1 m away aren't candidates. It joins the best object if the
-   score is above the threshold, and otherwise becomes a new object. SAM IDs and labels don't decide it: two SAM IDs
-   on one object end up in one node when DINO and location agree, and an object that leaves the view and comes back
-   keeps its node.
-3. The object's **box grows to the union** of every box it was matched with (the smallest minimum and largest maximum
-   per axis), so it covers the whole space the object fills, also the parts hidden in some views. It never shrinks.
-   It keeps up to four DINO descriptors from different views, and sums its observations' SigLIP embeddings for text
-   search. SigLIP takes no part in matching.
+   Its SAM IDs all join one node, the older one where they already had two. Those two nodes don't merge there: that put
+   three monitors up to 2.7 m apart into one node on IMG_0649.
+2. Only **reliable** masks are evidence (`lift3d.reliable`): enough depth points, and a median VGGT-Omega depth
+   confidence of at least 2.5 (`lift3d.MIN_CONFIDENCE`). Far views fail it: their depth smears along the camera ray,
+   so a 1 m umbrella seen from 5 m got a 2 m box. An unreliable mask joins its track's node and does nothing else.
+3. A mask whose SAM ID has a node **joins that node**, unless the track was **cut**: its box is more than 0.3 m from
+   the box of the track's last reliable mask, or its DINO cosine to that mask is under 0.5 and the two boxes don't
+   touch, or another node matches it by 0.2 better than its own (a track that slid onto a neighbour). SAM 3 switches
+   IDs between objects that look alike and between neighbours, and each cue finds switches the others miss: on Replica
+   the gap and DINO alone find 69% of them, and wrongly cut 0.7% of the steps between masks of one object, which step 5
+   can join again. A DINO drop alone, with the boxes still touching, is mostly the same object seen from another side:
+   cutting there too found 73% of the switches but cut 3.2% of the steps within one object, and on IMG_0649 it made
+   new nodes that flickered in and out of the video. In a frame where three or more tracks, and at least half, move
+   over 0.3 m at once, the camera pose is off and nothing is cut. A node takes one mask per frame: when two masks of a
+   frame follow their tracks to one node (one track was cut and its rest matched there), they are two objects, and the
+   one that matches the node less is cut.
+4. New tracks, and the rest of cut ones, are scored against every object in memory with their **DINO appearance**
+   and **location**: the best DINO cosine against the object's few stored descriptors, and how much of one 3D box lies
+   inside the other and how close their centres are. Objects more than 1 m away aren't candidates. One joins the best
+   object above the threshold, and otherwise becomes a new object.
+5. A node that gets a reliable view is scored the same way against the other nodes, and **merges** into the best one
+   above the threshold, unless the two were ever seen in one frame. This joins an object that comes back under a new
+   SAM ID, one first seen too far away to match, and a track that was cut by mistake.
+6. While the memory is built, an object's box is around the pooled points of its reliable masks, without the outer
+   2% on each side (`graph.node.node_box`); with no reliable mask, it is the box of its most confident one. It keeps
+   up to four DINO descriptors from different views, and sums its observations' SigLIP embeddings for text search.
+   SigLIP takes no part in matching.
+7. Once every frame is in, the nodes are checked as a whole (`graph/refine.py`). The scene is static, so an object's
+   place and extent are fixed; like ConceptGraphs' post-processing, this keeps fewer objects rather than more, and
+   only those whose box can be trusted. A node whose points form clusters over 0.3 m apart is **split**, one node per
+   cluster (10 cm cubes that hold at least a tenth of the node's typical cube; each mask goes with the cluster that
+   holds most of its points): on IMG_0649 this separates two monitors a SAM track slid between. Each node is
+   **labelled** from all its views: SAM's votes for its prompts, weighed by how well SigLIP's mean embedding of the
+   node matches each prompt's text (73% of the Replica nodes get their GT object's class, against 70% from the votes
+   alone). Nodes of one label then **merge** three ways: two masks of one object in the frames both are in, such as a
+   chair and its seat (the smaller mask inside the other in the median shared frame); parts alike in DINO with half
+   the points of the one seen less within 15 cm of the other's (ConceptGraphs' overlap; a fifth of its box inside the
+   other's is enough, since a monitor's box can be 0.1 or 0.45 m deep with VGGT-Omega's depth); and parts that the
+   frames seeing both agree are one, as in MaskClustering's view consensus (one mask holds both in 80% of at least 3
+   frames). Two nodes seen in one frame as two masks don't merge, unless that is a slip of SAM's tracker: at most 20%
+   of the frames of the one seen less (on IMG_0649, a monitor's two IDs shared 3 of 21 frames, where one track slid
+   onto the next monitor). Checked alone against Replica's objects, 89% of the first, 41 of 42 of the second and 14 of
+   14 of the third joined one object. Last, only nodes whose box can be trusted are **kept**: at least 10 reliable
+   views, spanning at least 20 degrees around the object, and at least 70% **coverage**, the share of its points in
+   view that lie inside its own mask in its frames. A node that joined several objects fails this (a far monitor and a
+   table top SAM called a monitor, whose box spanned the room on IMG_0649), and a node seen from one direction has a
+   depth extent no view checked. Nodes only ever small (under 0.2% of the image) and far (over 4 m) go too. The masks
+   of dropped nodes get node -1, which the video, the map, the queries and the evaluation leave out. On the 8 Replica
+   scenes with VGGT-Omega's depth, a scene keeps 46 nodes instead of the memory's 121, 7 instead of 48 of them
+   matching no GT object; 5% of the object boxes kept are off (IoU under 0.2) instead of 21%, mean IoU 0.54 instead of
+   0.45; of the 368 revisits (an object leaves the view and comes back), the merges keep the object's node in 224 and
+   switch it in 34, against 214 and 47 for the memory alone, and after the last step 203 keep it and 17 switch while
+   38 more fall on dropped nodes; IDF1 0.598 to 0.640 (precision 0.55 to 0.68, recall 0.67 to 0.61) and L1 mAP 0.552
+   to 0.596. The price is the objects whose box couldn't be checked: 18.5 objects a scene get a good box (IoU 0.5 or
+   more) instead of 25, and the nearest-object query, which needs both objects in the map, drops (oracle 0.51 to
+   0.33). On IMG_0649, 43 nodes instead of 139, with 22% of the masks left out: most of the dropped nodes are chairs
+   and monitors seen from under 20 degrees. The long tables left (6 to 8 m) follow rows of desks; whether each is one
+   row, or two that one SAM track joined, no view can tell, since the rows are never in view together. The thresholds
+   are refine.py's constants.
+8. Then each object's **box** is drawn again from every view of it (`graph/shape.py`), and the graph stage keeps it.
+   Each reliable mask is lifted again from its frame's depth at the depth's own resolution (every pixel the mask
+   covers more than half of, minus each view's outliers), not from the boxes stage's 256-point samples of the
+   upsampled depth, so each view weighs by its pixels on the object and close views count more. A point lifted from
+   one view stays only if it lands inside the object's mask in at least half of its other views where it is in the
+   image and not hidden. A view whose depth smeared the object along its camera ray (a far view, or a thin object
+   against the wall behind) puts points beside the object in the views from other directions. The box is around the
+   kept points without the outer 0.5%: the old 2% cut the ends off long objects, which few views see. On the 8 Replica
+   scenes with VGGT-Omega's depth, the boxes of the memory's object nodes (before step 7) overlap the GT boxes more
+   (IoU 0.38 to 0.45, both grown by 5 cm on each side; 0.41 to 0.51 with Replica's depth; voting with the samples gave
+   0.43 and 0.48), and the nearest-object query gets 0.31 and 0.51 (labels, oracle) instead of 0.29 and 0.49. Lifting
+   like the map's point cloud (depth edges dropped, one point per 2 cm, no per-view outlier filter) gave 0.41: the map
+   has the same streaks, they just look like a few specks among the surfaces. On IMG_0649, 6 monitors seen in 20 or
+   more masks had boxes 2 to 3 m long, and 2 were still over 1.5 m: a node that holds two monitors (1.8 m), which step
+   7 now splits, and something 3.2 m tall that SAM called a monitor.
 
 The weights are DINO 0.45 and location 0.40 (normalised to 0.53 and 0.47), and the threshold 0.55 is above each, so a
 match needs both: the same place and the same look (`configs/association.json`, `--association-config` for another).
@@ -222,6 +288,7 @@ An object stands for the GT object its masks match in the most frames.
 - **reach**: share of the queried objects that some object in the map stands for, the recall a perfect ranking gets.
 
 This scores whole objects; OpenLex3D's own protocol scores point clouds, so the numbers aren't comparable with the paper.
+`evaluate_openlex3d.py` (below) runs that protocol.
 
 The third table scores the nearest-object query (`graph.query --near`) against the GT boxes (`evaluate.nearest_objects`).
 Every GT object asks for the nearest object of every class with at least two other objects in the scene, and the answer
@@ -239,6 +306,59 @@ every 20th frame and the GT boxes from all frames, which flips a few near ties.
 
 With `--mask-source gt` the tracks are the GT objects. Their identity row must score IDF1 = 1, which checks the
 evaluation itself, and their query row shows what SigLIP gets from a perfect map.
+
+### OpenLex3D's protocol: comparing with published methods
+
+`evaluate_openlex3d.py` scores a map with [OpenLex3D](https://github.com/openlex3d/openlex3d)'s own evaluation code. That
+puts it next to the methods its paper scores on the same 8 scenes: ConceptGraphs, HOV-SG, OpenMask3D and Kassab2024.
+The table lists the paper's own retrieval numbers (its Table 4: all queries, pooled over the scenes). OpenLex3D also
+publishes the methods' predictions; scoring ConceptGraphs' here gives the paper's numbers to 0.01 (5.86, 11.32,
+22.40 against 22.39), which checks that this script runs OpenLex3D's code as the authors did. `--baselines` is only
+needed for that check, or for what the paper doesn't print, such as l0 and l1 separately.
+
+```bash
+uv sync --extra cu130 --extra openlex3d   # OpenLex3D's code, open3d and faiss
+wget -P data/openlex3d_predictions http://aisdatasets.cs.uni-freiburg.de/openlex3d/predictions_sparse.zip   # 2 GB
+unzip data/openlex3d_predictions/predictions_sparse.zip -d data/openlex3d_predictions/extracted
+uv run --no-sync python evaluate_openlex3d.py --baselines concept-graphs   # check against the paper (optional)
+uv run --no-sync python evaluate_openlex3d.py --pose-source vggt --variants graph memory tracks
+uv run --no-sync python evaluate_openlex3d.py --table   # every method scored so far
+```
+
+**What gets scored.** Each map is exported to OpenLex3D's format in `outputs/openlex3d/predictions/<method>/replica/<scene>/`:
+
+- each node as the graph holds it: its box, with the points its views agree on (`graph.shape.object_points`) that
+  lie inside the box, one per 2 cm cube;
+- the object each point belongs to;
+- each object's SigLIP 2 embedding (the mean over its masks, as `graph.query` searches).
+
+Objects with no reliable mask have no points and are left out. `--variants` picks which objects:
+
+- `graph`: the graph stage's nodes;
+- `memory`: the memory's nodes before `graph/refine.py`;
+- `tracks`: the raw SAM tracks, or the GT objects with `--mask-source gt`, which is an upper bound.
+
+**Alignment.** With `--pose-source vggt`, the map is first moved into Replica's frame by the Sim(3) that best maps
+VGGT-Omega's camera centres onto the GT ones. Scale is fitted too. The camera error left after the fit is saved with the
+scores.
+
+**The two tasks.** They run as OpenLex3D's scripts run them:
+
+- **Segmentation, top-n:** every point of the GT cloud takes the n best of 1154 labels, from the nearest predicted point.
+  Per object, the table gives the share of its points whose labels hold a synonym, a depiction, a visually similar label
+  or clutter, or are wrong, or are missing (no predicted point within 5 cm).
+- **Queries:** each OpenLex3D query takes its 10 best objects. Each object stands for the GT mesh vertices within 3.2 cm
+  of its points, and is scored with instance-segmentation AP: mAP over IoU 0.5 to 0.95, AP50 and AP25, in percent.
+
+Scores go to `outputs/openlex3d/results/<method>.json`.
+
+**Caveats.**
+
+- Our maps are read with SigLIP 2's text encoder, and the paper's predictions with CLIP ViT-H-14, as in the paper.
+- Replica runs prompt SAM with the scene's own GT classes. Score `--vocab indoor` runs for a fair comparison.
+- The paper's methods ran on every 10th frame (`--stride 10`).
+- The 3.2 cm tolerance makes AP sensitive to depth and pose error, not only to the objects found.
+- OpenLex3D's segmentation code takes about 2 minutes per scene for each top-n.
 
 ### Video
 
@@ -260,7 +380,13 @@ inside is the share of the smaller box inside the larger (`lift3d.box_containmen
 object lies inside the object's box, which has grown to all its views, so IoU would score it near 0 and split the
 object into many nodes. A match needs a score strictly above the threshold; in each frame the strongest pairs
 are assigned first, one observation per object. `require_same_label` adds a same-label rule, off by default since
-prompt labels change between views.
+prompt labels change between views. `cut_gap`, `cut_dino`, `cut_dino_gap` (how far apart the boxes must also be for a
+DINO cut; `null` lets DINO cut alone), `switch_margin` and `bad_frame_tracks` set when a track is cut;
+`follow_tracks: false` matches every mask on its own instead, without merges. `cut_after: 2` cuts a track only where it
+jumps in two reliable masks in a row, and keeps a one-frame jump in the node as a member only. That leaves fewer nodes
+of one mask that flash up in the video (20 instead of 34 on IMG_0649), but a one-frame jump is mostly SAM's mask on
+another object for that frame, so on Replica IDF1 falls from 0.598 to 0.588 and the nodes hold 1.28 GT objects each
+instead of 1.15; it is off (1) by default.
 
 Changing only the config recomputes only the graph. To rebuild it from the cached stages without loading any model
 or scoring it:
@@ -269,10 +395,12 @@ or scoring it:
 uv run --no-sync python run.py --source replica/room_0/00 --graph-only --association-config configs/association.json
 ```
 
-The graph stage directory holds the node per mask (`arrays.npz`, read by the evaluation, video and plots), `memory/`
+The graph stage directory holds the node per mask and each node's box (`arrays.npz`, read by the evaluation, video
+and plots), `memory/`
 (the compact object memory: IDs, labels, boxes, DINO descriptors, SigLIP sums, first and last frame;
 `graph.pipeline.load_memory()` restores it and can go on with later frames), and `matches.json` and `history.json` (each
-observation's best candidate and scores, and the node count per frame, for inspection). `--skip-text-eval` scores
+observation's route, `track`, `match` or `new`, with its cut and scores; the node count per frame), and `merges.json`
+(each merge with the IDs of the time and the final `node`), for inspection. `--skip-text-eval` scores
 identities without loading the text encoder.
 
 `notebooks/visualize_graph.ipynb` (`graph/visualize.py`) is for tuning: interactive Plotly boxes and edges, RGB/SAM

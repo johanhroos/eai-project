@@ -41,6 +41,8 @@ class Edge:
 
 def box_corners(nodes: list[Node]) -> tuple[np.ndarray, np.ndarray]:
     """(M, 3) box_min and box_max of the nodes, in list order."""
+    if not nodes:
+        return np.empty((0, 3)), np.empty((0, 3))
     return np.stack([n.box_min for n in nodes]), np.stack([n.box_max for n in nodes])
 
 
@@ -77,6 +79,8 @@ def build_edges(nodes: list[Node]) -> list[Edge]:
 
     Nodes without a box, with a STRUCTURE label or with a box side over MAX_SIDE get none.
     """
+    if not nodes:
+        return []
     lo, hi = box_corners(nodes)
     gap = box_gap(lo, hi)
     on = rests_on(lo, hi)

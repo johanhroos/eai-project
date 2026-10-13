@@ -1,6 +1,7 @@
 """Headless Plotly/Jupyter views over cached observations and replayed memory."""
 
 from dataclasses import replace
+from functools import partial
 from html import escape
 from io import BytesIO
 
@@ -12,7 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 from graph.association import valid_box
 from graph.edges import build_edges
 from graph.node import Node
-from graph.pipeline import cached_observations, replay, save_result
+from graph.pipeline import cached_observations, finish, replay, save_result
 from graph.query import rank
 from utils import footage
 
@@ -197,7 +198,7 @@ class GraphExplorer:
         return self._prefix[1]
 
     def save(self):
-        save_result(self.run.stage_dir("graph"), self.result)
+        save_result(self.run.stage_dir("graph"), self.result, partial(finish, self.run, *self.data))
 
     def search(self, text, top=5, encoder=None):
         """Rank remembered objects by SigLIP text similarity, without image inference."""

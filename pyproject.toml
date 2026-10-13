@@ -35,6 +35,9 @@ module-name = ["utils", "models", "graph"]
 [project.optional-dependencies]
 cu126 = ["torch>=2.11.0", "torchvision>=0.26.0", "torchcodec>=0.12.0"]
 cu130 = ["torch>=2.11.0", "torchvision>=0.26.0", "torchcodec>=0.12.0"]
+# OpenLex3D's evaluation code (evaluate_openlex3d.py). It imports scikit-learn without listing it, and needs one of
+# faiss-cpu or faiss-gpu
+openlex3d = ["openlex3d", "faiss-cpu>=1.12.0", "scikit-learn>=1.7.0"]
 
 [tool.uv]
 conflicts = [[{ extra = "cu126" }, { extra = "cu130" }]]
@@ -55,6 +58,7 @@ torchcodec = [
     { index = "pytorch-cu130", extra = "cu130" },
 ]
 vggt-omega = { git = "https://github.com/facebookresearch/vggt-omega", rev = "48b23c8ce72c9a8fcf987f0d7f43d8e4870759f6" }
+openlex3d = { git = "https://github.com/openlex3d/openlex3d", rev = "8f4efb055c4f7e5b9d63714b1f90a612fd2f839b" }
 
 [[tool.uv.index]]
 name = "pytorch-cu130"

@@ -50,9 +50,9 @@ def plot(run: Run, highlight: list[int] | None = None, near: bool = True) -> plt
         return 1.0 if not lit or lit & set(ids) else 0.15
 
     fig, ax = plt.subplots(figsize=(13, 10))
-    lo = np.min([n.box_min[:2] for n in shown], axis=0) - MARGIN
-    hi = np.max([n.box_max[:2] for n in shown], axis=0) + MARGIN
     points, rgb = map_view.point_cloud(run)
+    corners = [c for n in shown for c in (n.box_min[:2], n.box_max[:2])] or points[:, :2]  # no nodes: the whole room
+    lo, hi = np.min(corners, axis=0) - MARGIN, np.max(corners, axis=0) + MARGIN
     inside = ((points[:, :2] >= lo) & (points[:, :2] <= hi)).all(axis=1)
     ax.scatter(points[inside, 0], points[inside, 1], c=rgb[inside] / 255, s=1, alpha=0.45, linewidths=0)
 

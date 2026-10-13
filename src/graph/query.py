@@ -22,12 +22,14 @@ from utils.schema import Masks, TextAligned
 def object_embeddings(masks: Masks, emb: TextAligned, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """The distinct object IDs in ids and their (M, D) L2-normalized embeddings, the mean over each one's masks.
 
-    ids gives one object ID per mask, such as Graph.node or Masks.sam_id. For the graph on SAM 3 masks, a plain mean
-    ranked the OpenLex3D queries better than one weighted by mask area (L0 mAP 0.44 against 0.41 over the 8 scenes).
+    ids gives one object ID per mask, such as Graph.node or Masks.sam_id, and -1 for masks of no object. For the graph
+    on SAM 3 masks, a plain mean ranked the OpenLex3D queries better than one weighted by mask area (L0 mAP 0.44
+    against 0.41 over the 8 scenes).
     """
-    objects, inverse = np.unique(ids, return_inverse=True)
+    rows = np.flatnonzero(ids >= 0)
+    objects, inverse = np.unique(ids[rows], return_inverse=True)
     sums = np.zeros((len(objects), emb.siglip.shape[1]), np.float32)
-    np.add.at(sums, inverse, emb.siglip.astype(np.float32))
+    np.add.at(sums, inverse, emb.siglip[rows].astype(np.float32))
     return objects, sums / np.maximum(np.linalg.norm(sums, axis=1, keepdims=True), 1e-6)
 
 
