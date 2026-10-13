@@ -15,15 +15,15 @@ the mask in the views from other directions. The box is around the kept points w
 axis.
 
 On the 8 Replica scenes, over the nodes of objects other than walls, floors and ceilings, these boxes overlap the GT
-objects' boxes more than graph.node.node_box's around all the pooled points: IoU 0.38 to 0.45 with VGGT-Omega's depth
+objects' boxes more than graph.nodes.node_box's around all the pooled points: IoU 0.38 to 0.45 with VGGT-Omega's depth
 (both boxes grown by 5 cm on each side), 0.41 to 0.51 with Replica's, and 0.55 to 0.61 with GT masks and VGGT-Omega's
 depth, so most of what is left is the grouping and the depth. Voting with the boxes stage's samples gave 0.43, 0.48
-and 0.58. Lifting like utils/map_view.py's point cloud, without depth edges and thinned to one point per 2 cm but
+and 0.58. Lifting like views/rerun_map.py's point cloud, without depth edges and thinned to one point per 2 cm but
 without robust_filter, gave 0.41: the map's cloud has the same streaks, it only shows them as a few specks among the
 surfaces, and thinning gives those specks as much weight as the surfaces.
 
-The graph stage keeps these boxes (Graph.box_min and box_max), and graph.node.build_nodes uses them. The object
-memory can't: it only knows the frames so far, and boxes around the pooled points (graph.node.node_box) are what it
+The graph stage keeps these boxes (Graph.box_min and box_max), and graph.nodes.build_nodes uses them. The object
+memory can't: it only knows the frames so far, and boxes around the pooled points (graph.nodes.node_box) are what it
 matches with.
 """
 
@@ -31,9 +31,9 @@ import numpy as np
 import pycocotools.mask as mask_utils
 from PIL import Image
 
-from graph.node import node_box
-from utils import lift3d
-from utils.schema import Boxes, Masks, Run, load_stage
+from data.stages import Boxes, Masks, Run, load_stage
+from geometry import lift3d
+from graph.nodes import node_box
 
 COVER = 0.5  # share of a pixel at the depth's resolution a mask must cover for the pixel to be lifted
 MAD = 3.0  # robust_filter's limit for each view's points, in median absolute deviations
@@ -66,9 +66,9 @@ def view_source(run: Run):
             return depth[::2, ::2], np.diag([0.5, 0.5, 1.0]) @ K, c2w
 
         return every_second
+    from data import footage
+    from data.stages import Geometry
     from models.vggt import world_from_camera
-    from utils import footage
-    from utils.schema import Geometry
 
     geometry = load_stage(run.stage_dir("vggt"), Geometry)
     row = {int(f): k for k, f in enumerate(geometry.frame)}
@@ -94,7 +94,7 @@ def shrink(mask: np.ndarray, size: tuple[int, int], cover: float = 0.25) -> np.n
 def object_boxes(run: Run, masks: Masks, boxes: Boxes, node: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """(M, 3) box_min and box_max of every node ID 0 ... M - 1 in node, the node ID of every mask (-1 for none).
 
-    A node without a reliable mask gets graph.node.node_box's box, and IDs no mask has get NaN.
+    A node without a reliable mask gets graph.nodes.node_box's box, and IDs no mask has get NaN.
     """
     n_ids = int(node.max()) + 1 if len(node) and node.max() >= 0 else 0
     lo, hi = np.full((n_ids, 3), np.nan, np.float32), np.full((n_ids, 3), np.nan, np.float32)

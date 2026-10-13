@@ -8,10 +8,10 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModel, AutoProcessor
 
+from data import footage
+from data.stages import Masks, Run, TextAligned
+from models.crops import pad_bbox, square_bbox
 from models.sam import mask_boxes
-from utils import footage
-from utils.image_crop import pad_bbox, square_bbox
-from utils.schema import Masks, Run, TextAligned
 
 MODEL_ID = "google/siglip2-so400m-patch16-384"
 TEMPLATE = "This is a photo of {}."  # the prompt format of the SigLIP 2 model card

@@ -1,6 +1,6 @@
 """The frames of a run, whatever its source: a Replica sequence or a phone video.
 
-  replica/<scene>/<seq>  vMAP's Replica renders (utils/replica.py), 1200 x 680 PNGs
+  replica/<scene>/<seq>  vMAP's Replica renders (data/replica.py), 1200 x 680 PNGs
   phone/<name>           a video at data/phone/<name>.<ext>, any container ffmpeg reads. The frames stage (extract)
                          decodes every stride-th frame, upright as a player shows it, and saves it as a JPEG with the
                          long side at most MAX_SIDE pixels.
@@ -15,9 +15,9 @@ import numpy as np
 from PIL import Image
 from torchcodec.decoders import VideoDecoder
 
-from utils import replica
-from utils.config import DATA_DIR
-from utils.schema import Frames, Run, load_stage, save_stage
+from data import replica
+from data.paths import DATA_DIR
+from data.stages import Frames, Run, load_stage, save_stage
 
 PHONE_DIR = DATA_DIR / "phone"
 MAX_SIDE = 1280  # Replica's frames are 1200 wide; phone video is often 1920 or 3840

@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pycocotools.mask as mask_utils
 
-from utils.config import OUTPUT_DIR, STAGE_KEYS
+from data.paths import OUTPUT_DIR, STAGE_KEYS
 
 
 def _check(name: str, a, dtype, shape: tuple) -> None:
@@ -99,7 +99,7 @@ def check_aligned(run: Run, stage: str) -> None:
 
 @dataclass
 class Graph:
-    """Persistent node of every mask, row-aligned with masks (graph/pipeline.py).
+    """Persistent node of every mask, row-aligned with masks (graph/build.py).
 
     Masks join the node of their SAM track, one frame at a time. A track that jumps to another object is cut, and new
     tracks are matched to the nodes by appearance and location, so several tracks can end up in one node and, where
@@ -107,12 +107,12 @@ class Graph:
     """
 
     node: np.ndarray  # (N,) int32, node ID: 0, 1, ... in order of first appearance
-    # (M, 3) float32 by node ID, world frame: each node's box from every view of it (graph/shape.py). None in a graph
-    # that only replays the memory, whose boxes graph.node.node_box draws around the pooled points
+    # (M, 3) float32 by node ID, world frame: each node's box from every view of it (graph/multiview.py). None in a
+    # graph that only replays the memory, whose boxes graph.nodes.node_box draws around the pooled points
     box_min: np.ndarray | None = None
     box_max: np.ndarray | None = None
     # (M,) int16 by node ID: each node's label, an index into the masks stage's vocab, from all its views
-    # (graph/refine.py labels); -1 for IDs no mask has. None: graph.node.build_nodes counts SAM's votes
+    # (graph/refine.py labels); -1 for IDs no mask has. None: graph.nodes.build_nodes counts SAM's votes
     label: np.ndarray | None = None
 
     def __post_init__(self):

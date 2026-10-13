@@ -3,12 +3,12 @@
 Replica runs are scored against the ground truth at the end. Phone runs (--source phone/<name> for a video
 data/phone/<name>.<ext>) have no ground truth: they use VGGT-Omega's poses and stop after the graph.
 
-The graph stage (graph/pipeline.py) takes the masks one frame at a time. A mask joins the object its SAM track
+The graph stage (graph/build.py) takes the masks one frame at a time. A mask joins the object its SAM track
 belongs to; new tracks, and tracks that jumped to another object, join the object in memory they match by DINO
 appearance and location (configs/association.json), or make a new one. At the end, nodes whose points form clusters
 apart are split, each is labelled from all its views, masks and parts of one object are merged, and only the objects
 whose box can be trusted are kept (graph/refine.py); each object's box is then drawn from the points its views agree
-on (graph/shape.py).
+on (graph/multiview.py).
 """
 
 import argparse
@@ -24,12 +24,8 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import numpy as np
 import torch
 
-import evaluate
-from graph import pipeline
-from graph.association import AssociationConfig
-from models import dino, sam, siglip, vggt
-from utils import footage, lift3d, replica, vocab
-from utils.schema import (
+from data import footage, replica, vocab
+from data.stages import (
     Boxes,
     Events,
     Features,
@@ -42,6 +38,11 @@ from utils.schema import (
     load_stage,
     save_stage,
 )
+from evaluation import metrics
+from geometry import lift3d
+from graph import build
+from graph.memory import AssociationConfig
+from models import dino, sam, siglip, vggt
 
 STAGES = ["frames", "masks", "features", "siglip", "vggt", "boxes", "graph", "events", "gt_boxes"]
 # A stage is recomputed when one of these was saved after it, such as boxes after a new vggt stage
@@ -59,8 +60,8 @@ parser.add_argument("--stride", type=int, default=20)
 parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
 parser.add_argument(
     "--association-config",
-    default=str(pipeline.DEFAULT_CONFIG),
-    help="JSON of graph.association.AssociationConfig, the graph's matching parameters",
+    default=str(build.DEFAULT_CONFIG),
+    help="JSON of graph.memory.AssociationConfig, the graph's matching parameters",
 )
 parser.add_argument(
     "--graph-only",
@@ -160,7 +161,7 @@ results = {}
 for run in runs:
     source = run.source
     if args.graph_only:
-        pipeline.rebuild(run, association_config)
+        build.rebuild(run, association_config)
         node = load_stage(run.stage_dir("graph"), Graph).node
         print(f"{source}: saved {len(np.unique(node[node >= 0]))} objects to {run.stage_dir('graph')}")
         continue
@@ -209,14 +210,14 @@ for run in runs:
         print(f"Saved boxes to {run.stage_dir('boxes')}")
     boxes = load_stage(run.stage_dir("boxes"), Boxes)
 
-    if stale(run, "graph", pipeline.metadata(association_config)):
+    if stale(run, "graph", build.metadata(association_config)):
         names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
         embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
-        built = pipeline.replay(
+        built = build.replay(
             masks, boxes, features, embeddings, names, association_config, frames=footage.frame_numbers(run)
         )
-        finish = partial(pipeline.finish, run, masks, boxes, features, embeddings, names)
-        pipeline.save_result(run.stage_dir("graph"), built, finish)
+        finish = partial(build.finish, run, masks, boxes, features, embeddings, names)
+        build.save_result(run.stage_dir("graph"), built, finish)
         check_aligned(run, "graph")
         node = load_stage(run.stage_dir("graph"), Graph).node
         print(f"Saved graph to {run.stage_dir('graph')}: {len(np.unique(node[node >= 0]))} objects")
@@ -252,26 +253,26 @@ for run in runs:
     objects = replica.load_objects(replica.parse_source(run.source)[0])
     graphs = {"tracks, no graph": Graph(masks.sam_id), "graph": load_stage(run.stage_dir("graph"), Graph)}
     predictions = {name: graph.node for name, graph in graphs.items()}
-    results[source] = {name: evaluate.evaluate(masks, ids, gt, events, objects) for name, ids in predictions.items()}
+    results[source] = {name: metrics.evaluate(masks, ids, gt, events, objects) for name, ids in predictions.items()}
     embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
     for level in () if args.skip_text_eval else ("level0", "level1"):
         targets = replica.load_queries(replica.parse_source(run.source)[0], level)
         text = siglip.load_encoder().encode_text(list(targets)).cpu().numpy()
         for name, ids in predictions.items():
-            scores = evaluate.queries(masks, ids, gt, embeddings, targets, text)
+            scores = metrics.queries(masks, ids, gt, embeddings, targets, text)
             results[source][name].update({f"{level}_{k}": v for k, v in scores.items()})
     names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
     gt_boxes = load_stage(run.stage_dir("gt_boxes"), ObjectBoxes)
     for name, graph in graphs.items():
-        results[source][name].update(evaluate.nearest_objects(masks, graph, gt, boxes, names, gt_boxes, objects))
+        results[source][name].update(metrics.nearest_objects(masks, graph, gt, boxes, names, gt_boxes, objects))
     run.stage_dir("eval").mkdir(parents=True, exist_ok=True)
     (run.stage_dir("eval") / "metrics.json").write_text(json.dumps(results[source], indent=2))
 
 if results:
     print(f"\nmask source {args.mask_source}, pose source {runs[0].pose_source}, stride {args.stride}")
-    print(evaluate.table(results))
+    print(metrics.table(results))
     if not args.skip_text_eval:
         print("\nText queries (OpenLex3D level 0 and level 1)")
-        print(evaluate.table(results, evaluate.QUERY_COLUMNS))
+        print(metrics.table(results, metrics.QUERY_COLUMNS))
     print("\nNearest object of a type (graph.query --near), against the GT boxes")
-    print(evaluate.table(results, evaluate.NEAR_COLUMNS))
+    print(metrics.table(results, metrics.NEAR_COLUMNS))

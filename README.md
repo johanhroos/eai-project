@@ -73,16 +73,16 @@ as well: request it like SAM 3 and use the same `hf auth login`.
 
 | Stage | Code | Contents |
 |---|---|---|
-| `frames` | `utils/footage.py` | Only for phone videos: every stride-th frame as a JPEG |
-| `masks` | `models/sam.py`, `utils/replica.py` | SAM 3 masks prompted with the scene's classes or a fixed list (`--mask-source sam3`), or the GT masks (`gt`) |
+| `frames` | `data/footage.py` | Only for phone videos: every stride-th frame as a JPEG |
+| `masks` | `models/sam.py`, `data/replica.py` | SAM 3 masks prompted with the scene's classes or a fixed list (`--mask-source sam3`), or the GT masks (`gt`) |
 | `features` | `models/dino.py` | DINOv3 embedding per mask: patch tokens of the mask's padded box crop, averaged over the mask |
 | `siglip` | `models/siglip.py` | SigLIP 2 embedding per mask, comparable with text: the mean of a square crop around the mask and the same crop greyed outside it |
 | `vggt` | `models/vggt.py` | Only with `--pose-source vggt`: VGGT-Omega depth and cameras for every frame, in metres with z up |
-| `boxes` | `utils/lift3d.py` | World-frame 3D box per mask, 256 of its points and the median confidence of its depth (VGGT-Omega's; NaN for Replica's), from depth and pose. `lift3d.reliable` says which masks' depth to trust |
-| `graph` | `graph/association.py`, `graph/pipeline.py` | Object node per mask, from an object memory that takes the masks one frame at a time: a mask joins its SAM track's node, and DINO appearance and location cut tracks that jump and match new ones. Then the nodes are split, labelled and merged as a whole, and only those whose box can be trusted are kept (`graph/refine.py`; the masks of dropped ones get node -1), and each node's box is drawn from every view of it (`graph/shape.py`). Also the memory itself, the match scores, the merges, the node count over time and what refine did (`refine.json`). `graph/node.py` gives each node's label |
-| `events`, `gt_boxes` | `utils/lift3d.py` | Ground truth for the evaluation: when objects leave the view and come back, and one 3D box per object |
+| `boxes` | `geometry/lift3d.py` | World-frame 3D box per mask, 256 of its points and the median confidence of its depth (VGGT-Omega's; NaN for Replica's), from depth and pose. `lift3d.reliable` says which masks' depth to trust |
+| `graph` | `graph/memory.py`, `graph/build.py` | Object node per mask, from an object memory that takes the masks one frame at a time: a mask joins its SAM track's node, and DINO appearance and location cut tracks that jump and match new ones. Then the nodes are split, labelled and merged as a whole, and only those whose box can be trusted are kept (`graph/refine.py`; the masks of dropped ones get node -1), and each node's box is drawn from every view of it (`graph/multiview.py`). Also the memory itself, the match scores, the merges, the node count over time and what refine did (`refine.json`). `graph/nodes.py` gives each node's label |
+| `events`, `gt_boxes` | `geometry/lift3d.py` | Ground truth for the evaluation: when objects leave the view and come back, and one 3D box per object |
 
-The graph stage (`graph/pipeline.py`, `graph/association.py`) builds an object memory one frame at a time. SAM 3's
+The graph stage (`graph/build.py`, `graph/memory.py`) builds an object memory one frame at a time. SAM 3's
 tracker is mostly right about which masks are one object, so its tracks are the starting point, and DINO appearance
 and 3D location check them:
 
@@ -111,7 +111,7 @@ and 3D location check them:
    above the threshold, unless the two were ever seen in one frame. This joins an object that comes back under a new
    SAM ID, one first seen too far away to match, and a track that was cut by mistake.
 6. While the memory is built, an object's box is around the pooled points of its reliable masks, without the outer
-   2% on each side (`graph.node.node_box`); with no reliable mask, it is the box of its most confident one. It keeps
+   2% on each side (`graph.nodes.node_box`); with no reliable mask, it is the box of its most confident one. It keeps
    up to four DINO descriptors from different views, and sums its observations' SigLIP embeddings for text search.
    SigLIP takes no part in matching.
 7. Once every frame is in, the nodes are checked as a whole (`graph/refine.py`). The scene is static, so an object's
@@ -146,7 +146,7 @@ and 3D location check them:
    and monitors seen from under 20 degrees. The long tables left (6 to 8 m) follow rows of desks; whether each is one
    row, or two that one SAM track joined, no view can tell, since the rows are never in view together. The thresholds
    are refine.py's constants.
-8. Then each object's **box** is drawn again from every view of it (`graph/shape.py`), and the graph stage keeps it.
+8. Then each object's **box** is drawn again from every view of it (`graph/multiview.py`), and the graph stage keeps it.
    Each reliable mask is lifted again from its frame's depth at the depth's own resolution (every pixel the mask
    covers more than half of, minus each view's outliers), not from the boxes stage's 256-point samples of the
    upsampled depth, so each view weighs by its pixels on the object and close views count more. A point lifted from
@@ -174,12 +174,12 @@ uv run --no-sync python -m graph.query --source replica/room_0/00 "striped pillo
 uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --near sofa   # nearest object of a type
 uv run --no-sync python -m graph.query --source replica/room_0/00 --position 3.6 2.5 -0.9   # objects nearest a point
 uv run --no-sync python -m graph.edges --source replica/room_0/00                      # list the graph's edges
-uv run --no-sync python -m graph.plot_edges --source replica/room_0/00                 # eval/edges.png, nodes and edges
+uv run --no-sync python -m views.top_down --source replica/room_0/00                 # eval/edges.png, nodes and edges
 ```
 
-`notebooks/graph.ipynb` shows one run's nodes and edges from above (`graph/plot_edges.py`), one node with its
+`notebooks/graph.ipynb` shows one run's nodes and edges from above (`views/top_down.py`), one node with its
 neighbours, a nearest-object query, the map in Rerun with the edges as lines (`world/edges/on` and `world/edges/near`,
-also in `utils/map_view.py`'s other uses), and the query scores.
+also in `views/rerun_map.py`'s other uses), and the query scores.
 
 `graph/edges.py` connects the nodes by their 3D boxes, computed on the fly like the nodes:
 
@@ -231,14 +231,14 @@ graph:
 ```bash
 uv run --no-sync python run.py --source phone/kitchen
 uv run --no-sync python -m graph.query --source phone/kitchen "coffee mug"
-uv run --no-sync python -m utils.video --source phone/kitchen
-uv run --no-sync python -m utils.map_view --source phone/kitchen   # eval/map.rrd for the Rerun viewer
-uv run --no-sync python -m graph.plot_edges --source phone/kitchen # eval/edges.png, the objects and their edges
+uv run --no-sync python -m views.video --source phone/kitchen
+uv run --no-sync python -m views.rerun_map --source phone/kitchen   # eval/map.rrd for the Rerun viewer
+uv run --no-sync python -m views.top_down --source phone/kitchen # eval/edges.png, the objects and their edges
 ```
 
 `notebooks/map.ipynb` does all of this for one set of clips at a time: it collects clips sent with Tailscale, runs
 the pipeline with the prompts you set, and shows the map in Rerun (the point cloud, the camera's path and the objects'
-3D boxes), a picture of the graph from above with its edges (`graph/plot_edges.py`), the labelled video and a text
+3D boxes), a picture of the graph from above with its edges (`views/top_down.py`), the labelled video and a text
 search. 
 
 - **Several videos of one place** make one map: `--source phone/IMG_0644+IMG_0645`. SAM tracks each video on its
@@ -249,7 +249,7 @@ search.
   250 frames after the stride.
 - The `frames` stage keeps every `--stride`-th frame (stride 20 at 30 fps is 1.5 frames per second) and scales it
   down to 1280 pixels on the long side. A 60 s clip gives 90 frames.
-- SAM is prompted with a fixed list of 60 indoor objects (`utils/vocab.py`). `--vocab` takes another list, by name
+- SAM is prompted with a fixed list of 60 indoor objects (`data/vocab.py`). `--vocab` takes another list, by name
   (`indoor`) or as a file with one prompt per line, and puts that run's outputs in their own directories. Replica runs
   keep the scene's GT classes unless `--vocab` is given, so `--vocab indoor` on Replica is the test without that leak.
 - HDR video (most iPhone video by default) is decoded without tone mapping, so colours look flat; the `frames` stage
@@ -290,7 +290,7 @@ An object stands for the GT object its masks match in the most frames.
 This scores whole objects; OpenLex3D's own protocol scores point clouds, so the numbers aren't comparable with the paper.
 `evaluate_openlex3d.py` (below) runs that protocol.
 
-The third table scores the nearest-object query (`graph.query --near`) against the GT boxes (`evaluate.nearest_objects`).
+The third table scores the nearest-object query (`graph.query --near`) against the GT boxes (`metrics.nearest_objects`).
 Every GT object asks for the nearest object of every class with at least two other objects in the scene, and the answer
 is the one nearest by the GT boxes. In the map, the anchor is the node that stands for the GT object, and the query is
 right when the nearest candidate stands for the answer.
@@ -327,7 +327,7 @@ uv run --no-sync python evaluate_openlex3d.py --table   # every method scored so
 
 **What gets scored.** Each map is exported to OpenLex3D's format in `outputs/openlex3d/predictions/<method>/replica/<scene>/`:
 
-- each node as the graph holds it: its box, with the points its views agree on (`graph.shape.object_points`) that
+- each node as the graph holds it: its box, with the points its views agree on (`graph.multiview.object_points`) that
   lie inside the box, one per 2 cm cube;
 - the object each point belongs to;
 - each object's SigLIP 2 embedding (the mean over its masks, as `graph.query` searches).
@@ -362,13 +362,13 @@ Scores go to `outputs/openlex3d/results/<method>.json`.
 
 ### Video
 
-`utils/video.py` renders a run's frames to an MP4 with each object's mask outlined and labelled with its class and ID, with
+`views/video.py` renders a run's frames to an MP4 with each object's mask outlined and labelled with its class and ID, with
 the SAM tracks and the graph nodes side by side. Run `run.py` first, since it reads the cached stages. A node takes the
 colour of its largest track, so duplicates that the graph merged have two colours on the left and one on the right.
 
 ```bash
-uv run --no-sync python -m utils.video --source replica/room_0/00                            # eval/tracks_graph.mp4
-uv run --no-sync python -m utils.video --source replica/room_0/00 --panels tracks graph gt   # add the ground truth
+uv run --no-sync python -m views.video --source replica/room_0/00                            # eval/tracks_graph.mp4
+uv run --no-sync python -m views.video --source replica/room_0/00 --panels tracks graph gt   # add the ground truth
 ```
 
 ### Graph: configuration, rebuilds and tuning
@@ -398,7 +398,7 @@ uv run --no-sync python run.py --source replica/room_0/00 --graph-only --associa
 The graph stage directory holds the node per mask and each node's box (`arrays.npz`, read by the evaluation, video
 and plots), `memory/`
 (the compact object memory: IDs, labels, boxes, DINO descriptors, SigLIP sums, first and last frame;
-`graph.pipeline.load_memory()` restores it and can go on with later frames), and `matches.json` and `history.json` (each
+`graph.build.load_memory()` restores it and can go on with later frames), and `matches.json` and `history.json` (each
 observation's route, `track`, `match` or `new`, with its cut and scores; the node count per frame), and `merges.json`
 (each merge with the IDs of the time and the final `node`), for inspection. `--skip-text-eval` scores
 identities without loading the text encoder.

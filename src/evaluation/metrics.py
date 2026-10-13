@@ -26,10 +26,11 @@ import numpy as np
 import pycocotools.mask as mask_utils
 from scipy.optimize import linear_sum_assignment
 
+from data import replica
+from data.stages import Boxes, Events, Graph, Masks, ObjectBoxes, TextAligned
+from geometry import lift3d
 from graph import edges, query
-from graph.node import build_nodes
-from utils import lift3d, replica
-from utils.schema import Boxes, Events, Graph, Masks, ObjectBoxes, TextAligned
+from graph.nodes import build_nodes
 
 MATCH_IOU = 0.5
 REVISIT_WINDOW = 100  # raw frames to look for a match before the object leaves and after it comes back

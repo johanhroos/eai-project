@@ -8,7 +8,7 @@ import pycocotools.mask as mask_utils
 import torch
 from transformers import Sam3VideoModel, Sam3VideoProcessor
 
-from utils.schema import Masks, encode_rle
+from data.stages import Masks, encode_rle
 
 MODEL_ID = "facebook/sam3"
 

@@ -30,9 +30,9 @@ weight renormalization, so a match with less evidence cannot inflate its score.
 Only reliable masks (lift3d.reliable: enough depth, and confident where the depth has a confidence) are evidence.
 The others join their track's node but don't add to its box or DINO descriptors, and don't cut, match or merge: a
 far view's depth smears along the camera ray and its crop is a few pixels. A node's box is around the pooled points of
-its reliable masks without the outer 2% (graph.node.node_box), so it covers every part any view saw, but no single
-view sets it. The saved graph draws each node's box again from every view of it (graph/shape.py), which needs all the
-frames. SigLIP takes no part in matching; each node sums its observations' SigLIP embeddings for text search.
+its reliable masks without the outer 2% (graph.nodes.node_box), so it covers every part any view saw, but no single
+view sets it. The saved graph draws each node's box again from every view of it (graph/multiview.py), which needs all
+the frames. SigLIP takes no part in matching; each node sums its observations' SigLIP embeddings for text search.
 """
 
 import json
@@ -41,8 +41,8 @@ from pathlib import Path
 
 import numpy as np
 
-from graph.node import fit_box
-from utils.lift3d import MIN_CONFIDENCE, Box3D, box_containment
+from geometry.lift3d import MIN_CONFIDENCE, Box3D, box_containment
+from graph.nodes import fit_box
 
 
 def box_gap(a: Box3D, b: Box3D) -> float:
@@ -174,7 +174,7 @@ def update_bank(bank, descriptor, config):
 
 @dataclass
 class Observation:
-    """One object seen in one frame: the masks of one duplicate group (graph.pipeline.observation_groups)."""
+    """One object seen in one frame: the masks of one duplicate group (graph.build.observation_groups)."""
 
     dino: np.ndarray | None
     box: Box3D | None
