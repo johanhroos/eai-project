@@ -15,7 +15,6 @@ import argparse
 import json
 import os
 from dataclasses import replace
-from functools import partial
 
 # Lets PyTorch reuse reserved but free GPU memory for large blocks: SAM 3's tracker ran out of a 10 GB GPU on phone
 # video with 2.7 GB reserved and unused. Set before torch is imported.
@@ -28,7 +27,6 @@ from data import cli, footage, replica, vocab
 from data.stages import (
     Boxes,
     Events,
-    Features,
     Graph,
     Masks,
     ObjectBoxes,
@@ -150,7 +148,6 @@ for run in runs:
         save_stage(run.stage_dir("features"), dino.features(run, masks, dino.load_encoder()), {"model": dino.MODEL_ID})
         check_aligned(run, "features")
         print(f"Saved features to {run.stage_dir('features')}")
-    features = load_stage(run.stage_dir("features"), Features)
 
     if stale(run, "siglip"):
         embeddings = siglip.features(run, masks, siglip.load_encoder())
@@ -180,11 +177,7 @@ for run in runs:
     boxes = load_stage(run.stage_dir("boxes"), Boxes)
 
     if stale(run, "graph", build.metadata()):
-        names = mask_vocab(run)
-        embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
-        built = build.replay(masks, boxes, features, embeddings, names, frames=footage.frame_numbers(run))
-        finish = partial(build.finish, run, masks, boxes, features, embeddings, names)
-        build.save_result(run.stage_dir("graph"), built, finish)
+        build.rebuild(run)
         check_aligned(run, "graph")
         node = load_stage(run.stage_dir("graph"), Graph).node
         print(f"Saved graph to {run.stage_dir('graph')}: {len(np.unique(node[node >= 0]))} objects")

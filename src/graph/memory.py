@@ -210,7 +210,7 @@ class ObjectNode:
 class ObjectMemory:
     """Bounded per-object attributes, monotonic IDs, no deletion on disappearance.
 
-    Merges leave gaps in the IDs; renumber() closes them. Greedy strongest-pair-first matching is deterministic and
+    Merges leave gaps in the IDs; numbering() closes them. Greedy strongest-pair-first matching is deterministic and
     one-to-one within a frame. Match traces contain selected/best candidate scores before updates.
     """
 
@@ -479,20 +479,13 @@ class ObjectMemory:
         )
         return keep.id
 
-    def renumber(self) -> dict[int, int]:
-        """Number the nodes 0, 1, ... in order of first appearance again, closing the gaps merges left.
+    def numbering(self) -> dict[int, int]:
+        """The nodes numbered 0, 1, ... in order of first appearance, closing the gaps merges left.
 
-        Returns the new ID of every ID given so far, a merged one's being that of the node it went into.
+        Returns the number of every ID given so far, a merged one's being that of the node it went into.
         """
         new = {old: k for k, old in enumerate(sorted(self.nodes))}
-        mapping = {old: new[self.find(old)] for old in range(self.next_id)}
-        self.nodes = {new[old]: node for old, node in self.nodes.items()}
-        for node in self.nodes.values():
-            node.id = mapping[node.id]
-        self.tracks = {s: mapping[object_id] for s, object_id in self.tracks.items()}
-        self.merged = {}
-        self.next_id = len(self.nodes)
-        return mapping
+        return {old: new[self.find(old)] for old in range(self.next_id)}
 
     def _update(self, node: ObjectNode, observation: Observation, frame: int, track: bool = True) -> None:
         dino = normalized(observation.dino)
