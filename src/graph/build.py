@@ -3,7 +3,6 @@
 The one model a rebuild may load is SigLIP 2's text encoder, on the GPU, once per vocabulary (vocab_text).
 """
 
-import copy
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -123,13 +122,9 @@ def replay(
     return BuildResult(Graph(assignments), memory, matches, history, merges)
 
 
-def metadata(finished: bool = True) -> dict:
-    """The graph stage's metadata: the memory's settings, and those of finish's steps if they ran."""
-    return {
-        **object_memory.metadata(),
-        "refine": refine.PARAMS if finished else None,
-        "object_boxes": multiview.PARAMS if finished else None,
-    }
+def metadata() -> dict:
+    """The graph stage's metadata: the settings of the memory, of graph/refine.py and of graph/multiview.py."""
+    return {**object_memory.metadata(), "refine": refine.PARAMS, "object_boxes": multiview.PARAMS}
 
 
 Finish = Callable[[np.ndarray], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]]
@@ -177,26 +172,21 @@ def finish(
     return (final, *multiview.object_boxes(run, masks, boxes, final), labels, record)
 
 
-def save_result(path: Path, result: BuildResult, finish: Finish | None = None) -> None:
+def save_result(path: Path, result: BuildResult, finish: Finish) -> None:
     """Save the graph stage with its node IDs renumbered 0, 1, ... (graph.query and graph.edges index nodes by ID).
 
-    finish(node), such as build.finish for the run, takes the memory's node of every mask and gives the saved one
-    (-1 for none), the saved nodes' boxes and labels, and a record, saved as refine.json. Without it the memory's nodes
-    are saved as they are, without boxes or labels: graph.nodes.build_nodes then draws the boxes around the pooled
-    points and counts SAM's votes for the labels. refine.json's "memory_to_graph" maps each of the memory's nodes to
-    the saved node that holds most of its masks (null if it holds none). The traces get the saved IDs: a match's
-    object_id is the node of its masks, and a merge's trace keeps the IDs of the time and adds the saved node as
-    "node".
+    finish(node), such as build.finish for the run, takes the memory's node of every mask and gives the saved one (-1
+    for none), the saved nodes' boxes and labels, and a record, saved as refine.json. Its "memory_to_graph" maps each of
+    the memory's nodes to the saved node that holds most of its masks (null if it holds none). The traces get the saved
+    IDs: a match's object_id is the node of its masks, and a merge's trace keeps the IDs of the time and adds the saved
+    node as "node".
     """
-    if np.any(result.graph.node < 0):
-        raise ValueError("cannot save an incomplete prefix as the full graph")
     path.mkdir(parents=True, exist_ok=True)
     # Remove completion marker before writing any of the related artifacts.
     (path / "metadata.json").unlink(missing_ok=True)
-    memory = copy.deepcopy(result.memory)
-    mapping = memory.renumber()
+    mapping = result.memory.numbering()
     in_memory = np.array([mapping[int(i)] for i in result.graph.node], np.int32)
-    node, lo, hi, label, record = finish(in_memory) if finish is not None else (in_memory, None, None, None, None)
+    node, lo, hi, label, record = finish(in_memory)
     saved = {}  # the memory's IDs -> the saved node holding most of its masks
     for m in np.unique(in_memory).tolist():
         kept = node[(in_memory == m) & (node >= 0)]
@@ -210,11 +200,10 @@ def save_result(path: Path, result: BuildResult, finish: Finish | None = None) -
     merges = [{**m, "node": saved.get(mapping[m["kept"]])} for m in result.merges]
     (path / "refine.json").unlink(missing_ok=True)
     traces = [("matches", matches), ("history", result.history), ("merges", merges)]
-    if record is not None:
-        traces.append(("refine", {**record, "memory_to_graph": saved}))
+    traces.append(("refine", {**record, "memory_to_graph": saved}))
     for name, data in traces:
         (path / f"{name}.json").write_text(json.dumps(data, indent=2, allow_nan=False))
-    save_stage(path, Graph(node, lo, hi, label), metadata(finish is not None))
+    save_stage(path, Graph(node, lo, hi, label), metadata())
 
 
 def cached_observations(run: Run):
