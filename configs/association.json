@@ -10,5 +10,12 @@
   "center_distance_scale": 0.5,
   "descriptor_duplicate_similarity": 0.95,
   "require_same_label": false,
-  "duplicate_iou": 0.6
+  "duplicate_iou": 0.6,
+  "follow_tracks": true,
+  "cut_gap": 0.3,
+  "cut_dino": 0.5,
+  "cut_dino_gap": 0.0,
+  "cut_after": 1,
+  "bad_frame_tracks": 3,
+  "switch_margin": 0.2
 }

@@ -1,6 +1,7 @@
 """Score predicted object identities against the Replica ground truth.
 
-ids gives one predicted object ID per mask: the SAM track (Masks.sam_id) or the graph node (Graph.node). A prediction's
+ids gives one predicted object ID per mask: the SAM track (Masks.sam_id) or the graph node (Graph.node), -1 for a mask
+the graph left out (graph/refine.py), which predicts nothing. A prediction's
 segmentation in a frame is the union of its masks there, so a node that merged duplicates counts once. In a frame, a
 prediction matches a GT object when their masks have IoU >= MATCH_IOU.
 
@@ -45,7 +46,7 @@ def evaluate(masks: Masks, ids: np.ndarray, gt: Masks, events: Events, objects: 
     best = {}  # (frame, GT object) -> the matching prediction with the highest IoU
     n_pred = n_gt = 0
     for frame in np.union1d(masks.frame, gt.frame):
-        p_rows, g_rows = np.flatnonzero(masks.frame == frame), np.flatnonzero(gt.frame == frame)
+        p_rows, g_rows = np.flatnonzero((masks.frame == frame) & (ids >= 0)), np.flatnonzero(gt.frame == frame)
         preds = np.unique(ids[p_rows])
         objs = gt.sam_id[g_rows]
         counted = np.array([o not in ignored for o in objs.tolist()], bool) & (gt_area[g_rows] >= lift3d.MIN_PIXELS)
@@ -75,7 +76,7 @@ def evaluate(masks: Masks, ids: np.ndarray, gt: Masks, events: Events, objects: 
         "idf1": 2 * idtp / max(n_pred + n_gt, 1),
         "idp": idtp / max(n_pred, 1),
         "idr": idtp / max(n_gt, 1),
-        "ids": len(np.unique(ids)),
+        "ids": len(np.unique(ids[ids >= 0])),
         "ids_per_object": float((counts > 0).sum(0).mean()) if obj_ids else 0.0,
         "objects_per_id": float((counts > 0).sum(1).mean()) if pred_ids else 0.0,
         **revisits(best, events, ignored),
@@ -114,7 +115,9 @@ def owners(masks: Masks, ids: np.ndarray, gt: Masks) -> dict[int, int]:
     """
     votes = defaultdict(Counter)
     for frame in np.intersect1d(masks.frame, gt.frame):
-        p_rows, g_rows = np.flatnonzero(masks.frame == frame), np.flatnonzero(gt.frame == frame)
+        p_rows, g_rows = np.flatnonzero((masks.frame == frame) & (ids >= 0)), np.flatnonzero(gt.frame == frame)
+        if not len(p_rows):
+            continue
         preds = np.unique(ids[p_rows])
         pred_rle = [mask_utils.merge([masks.rle[r] for r in p_rows[ids[p_rows] == p]]) for p in preds]
         iou = np.asarray(mask_utils.iou(pred_rle, [gt.rle[r] for r in g_rows], [0] * len(g_rows)))
@@ -172,7 +175,7 @@ def queries(
 
 def nearest_objects(
     masks: Masks,
-    ids: np.ndarray,
+    ids: np.ndarray | Graph,
     gt: Masks,
     boxes: Boxes,
     vocab: list[str],
@@ -194,10 +197,15 @@ def nearest_objects(
       reach   share of the queries whose A and answer some node stands for: what oracle gets with perfect boxes
 
     Classes in replica.IGNORE_CLASSES are left out. The labels column needs SAM prompts that are Replica class names,
-    as on Replica without --vocab.
+    as on Replica without --vocab. ids is the node ID of every mask, or the graph stage, whose nodes then get its
+    boxes and labels.
     """
-    _, ids = np.unique(ids, return_inverse=True)  # 0, 1, ..., so node IDs are their indices in nodes
-    nodes = build_nodes(masks, boxes, Graph(node=ids.astype(np.int32)), vocab)
+    graph = ids if isinstance(ids, Graph) else Graph(node=np.asarray(ids, np.int32))
+    used = np.unique(graph.node[graph.node >= 0])
+    ids = np.where(graph.node >= 0, np.searchsorted(used, graph.node), -1)  # 0, 1, ..., so IDs index nodes
+    own = (graph.box_min[used], graph.box_max[used]) if graph.box_min is not None else (None, None)
+    label = graph.label[used] if graph.label is not None else None
+    nodes = build_nodes(masks, boxes, Graph(ids.astype(np.int32), *own, label), vocab)
     owner = owners(masks, ids, gt)
     stands_for = np.array([owner.get(n.id, -1) for n in nodes])
     node_class = np.array([objects[o].class_name if o >= 0 else "" for o in stands_for.tolist()])

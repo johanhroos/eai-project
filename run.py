@@ -3,14 +3,19 @@
 Replica runs are scored against the ground truth at the end. Phone runs (--source phone/<name> for a video
 data/phone/<name>.<ext>) have no ground truth: they use VGGT-Omega's poses and stop after the graph.
 
-The graph stage (graph/pipeline.py) takes the masks one frame at a time and joins each to the object in memory it
-matches by DINO appearance and location (configs/association.json), or makes it a new object.
+The graph stage (graph/pipeline.py) takes the masks one frame at a time. A mask joins the object its SAM track
+belongs to; new tracks, and tracks that jumped to another object, join the object in memory they match by DINO
+appearance and location (configs/association.json), or make a new one. At the end, nodes whose points form clusters
+apart are split, each is labelled from all its views, masks and parts of one object are merged, and only the objects
+whose box can be trusted are kept (graph/refine.py); each object's box is then drawn from the points its views agree
+on (graph/shape.py).
 """
 
 import argparse
 import json
 import os
 from dataclasses import replace
+from functools import partial
 
 # Lets PyTorch reuse reserved but free GPU memory for large blocks: SAM 3's tracker ran out of a 10 GB GPU on phone
 # video with 2.7 GB reserved and unused. Set before torch is imported.
@@ -157,8 +162,9 @@ results = {}
 for run in runs:
     source = run.source
     if args.graph_only:
-        result = pipeline.rebuild(run, association_config)
-        print(f"{source}: saved {len(result.memory.nodes)} objects to {run.stage_dir('graph')}")
+        pipeline.rebuild(run, association_config)
+        node = load_stage(run.stage_dir("graph"), Graph).node
+        print(f"{source}: saved {len(np.unique(node[node >= 0]))} objects to {run.stage_dir('graph')}")
         continue
     if not footage.is_replica(run) and stale(run, "frames"):
         footage.extract(run)
@@ -198,30 +204,32 @@ for run in runs:
             )
         free_gpu()
 
-    if stale(run, "boxes", {"points_per_mask": lift3d.POINTS_PER_MASK}):
-        meta = {"pose_source": run.pose_source, "points_per_mask": lift3d.POINTS_PER_MASK}
+    if stale(run, "boxes", {"points_per_mask": lift3d.POINTS_PER_MASK, "conf": "median"}):
+        meta = {"pose_source": run.pose_source, "points_per_mask": lift3d.POINTS_PER_MASK, "conf": "median"}
         save_stage(run.stage_dir("boxes"), lift3d.compute_boxes(run, masks), meta)
         check_aligned(run, "boxes")
         print(f"Saved boxes to {run.stage_dir('boxes')}")
     boxes = load_stage(run.stage_dir("boxes"), Boxes)
 
-    if stale(run, "graph", association_config.metadata()):
+    if stale(run, "graph", pipeline.metadata(association_config)):
         names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
         embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
         built = pipeline.replay(
             masks, boxes, features, embeddings, names, association_config, frames=footage.frame_numbers(run)
         )
-        pipeline.save_result(run.stage_dir("graph"), built)
+        finish = partial(pipeline.finish, run, masks, boxes, features, embeddings, names)
+        pipeline.save_result(run.stage_dir("graph"), built, finish)
         check_aligned(run, "graph")
-        print(f"Saved graph to {run.stage_dir('graph')}: {len(built.memory.nodes)} objects")
+        node = load_stage(run.stage_dir("graph"), Graph).node
+        print(f"Saved graph to {run.stage_dir('graph')}: {len(np.unique(node[node >= 0]))} objects")
 
     if not footage.is_replica(run):
         node = load_stage(run.stage_dir("graph"), Graph).node
         clip = footage.clip_index(run)[np.searchsorted(footage.frame_numbers(run), masks.frame)]
-        tracks, objects = len(np.unique(masks.sam_id)), len(np.unique(node))
+        tracks, objects = len(np.unique(masks.sam_id)), len(np.unique(node[node >= 0]))
         print(f"{run.source}: {len(masks.frame)} masks, {tracks} SAM tracks, {objects} objects")
         if clip.max() > 0:
-            shared = sum(len(np.unique(clip[node == n])) > 1 for n in np.unique(node))
+            shared = sum(len(np.unique(clip[node == n])) > 1 for n in np.unique(node[node >= 0]))
             print(f"  {shared} of the objects are seen in more than one video")
         continue  # no ground truth to score against
 
@@ -244,10 +252,8 @@ for run in runs:
     gt = load_stage(gt_run.stage_dir("masks"), Masks)
     events = load_stage(run.stage_dir("events"), Events)
     objects = replica.load_objects(replica.parse_source(run.source)[0])
-    predictions = {
-        "tracks, no graph": masks.sam_id,
-        "graph": load_stage(run.stage_dir("graph"), Graph).node,
-    }
+    graphs = {"tracks, no graph": Graph(masks.sam_id), "graph": load_stage(run.stage_dir("graph"), Graph)}
+    predictions = {name: graph.node for name, graph in graphs.items()}
     results[source] = {name: evaluate.evaluate(masks, ids, gt, events, objects) for name, ids in predictions.items()}
     embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
     for level in () if args.skip_text_eval else ("level0", "level1"):
@@ -258,8 +264,8 @@ for run in runs:
             results[source][name].update({f"{level}_{k}": v for k, v in scores.items()})
     names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
     gt_boxes = load_stage(run.stage_dir("gt_boxes"), ObjectBoxes)
-    for name, ids in predictions.items():
-        results[source][name].update(evaluate.nearest_objects(masks, ids, gt, boxes, names, gt_boxes, objects))
+    for name, graph in graphs.items():
+        results[source][name].update(evaluate.nearest_objects(masks, graph, gt, boxes, names, gt_boxes, objects))
     run.stage_dir("eval").mkdir(parents=True, exist_ok=True)
     (run.stage_dir("eval") / "metrics.json").write_text(json.dumps(results[source], indent=2))
 

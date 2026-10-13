@@ -18,7 +18,31 @@ def load_model() -> tuple[Sam3VideoProcessor, Sam3VideoModel]:
     """Load SAM 3 onto the GPU once per process; later calls return the same model."""
     processor = Sam3VideoProcessor.from_pretrained(MODEL_ID)
     model = Sam3VideoModel.from_pretrained(MODEL_ID, dtype=torch.bfloat16, attn_implementation="sdpa").to("cuda").eval()
+    model._tracker_update_memories = offload_memories(model._tracker_update_memories)
+    model.tracker_model._batch_encode_memories = offload_memories(model.tracker_model._batch_encode_memories)
     return processor, model
+
+
+def offload_memories(encode):
+    """Wrap one of SAM 3's two memory encoders so the memories it stores go to the session's state device.
+
+    transformers 5.17 moves the tracker's outputs to inference_state_device but stores the encoded memories, about
+    1.25 MB per object and frame, where they were computed. On the GPU they took 13.7 GB by frame 139 of IMG_0649 with
+    7 prompts (90 objects), and the 249 frames ran out of 32 GB. The tracker moves each memory back to the GPU when it
+    attends to it.
+    """
+
+    def wrapped(inference_session, frame_idx, **kwargs):
+        encode(inference_session=inference_session, frame_idx=frame_idx, **kwargs)
+        for outputs in inference_session.output_dict_per_obj.values():
+            for stored in outputs.values():
+                out = stored.get(frame_idx)
+                for key in ("maskmem_features", "maskmem_pos_enc"):
+                    # Blocking: a non_blocking copy to the CPU can return before it is filled
+                    if out is not None and isinstance(out.get(key), torch.Tensor):
+                        out[key] = out[key].to(inference_session.inference_state_device)
+
+    return wrapped
 
 
 @torch.inference_mode()
@@ -33,8 +57,9 @@ def segment(
 
     frames are RGB (H, W, 3) uint8 in temporal order, and Masks.frame holds frame_numbers[i] for frames[i].
     Masks.prompt indexes prompts. SAM 3 keeps the masks of one prompt apart, but masks of different prompts can overlap.
-    The whole clip and the tracker state stay in CPU memory during tracking. The tracker keeps every frame's masks and
-    features for every object, so on the GPU it outgrew 32 GB at 100 frames; on the CPU it costs about 40% speed.
+    The whole clip and the tracker state stay in CPU memory during tracking, memories included (offload_memories). The
+    tracker keeps every frame's masks and features for every object, so on the GPU it outgrew 32 GB at 100 frames; on
+    the CPU it costs about 40% speed.
     """
     if len(frames) != len(frame_numbers):
         raise ValueError(f"got {len(frames)} frames but {len(frame_numbers)} frame numbers")

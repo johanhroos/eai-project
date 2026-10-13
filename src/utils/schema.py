@@ -101,14 +101,31 @@ def check_aligned(run: Run, stage: str) -> None:
 class Graph:
     """Persistent node of every mask, row-aligned with masks (graph/pipeline.py).
 
-    Masks join nodes one frame at a time by appearance and location, so one SAM track can end up in several nodes and
-    several tracks in one. A prefix replay (graph/visualize.py) uses -1 for the rows not processed yet.
+    Masks join the node of their SAM track, one frame at a time. A track that jumps to another object is cut, and new
+    tracks are matched to the nodes by appearance and location, so several tracks can end up in one node and, where
+    SAM's ID switched objects, one track in several. A prefix replay (graph/visualize.py) uses -1 for the rows not
+    processed yet.
     """
 
     node: np.ndarray  # (N,) int32, node ID: 0, 1, ... in order of first appearance
+    # (M, 3) float32 by node ID, world frame: each node's box from every view of it (graph/shape.py). None in a graph
+    # that only replays the memory, whose boxes graph.node.node_box draws around the pooled points
+    box_min: np.ndarray | None = None
+    box_max: np.ndarray | None = None
+    # (M,) int16 by node ID: each node's label, an index into the masks stage's vocab, from all its views
+    # (graph/refine.py labels); -1 for IDs no mask has. None: graph.node.build_nodes counts SAM's votes
+    label: np.ndarray | None = None
 
     def __post_init__(self):
         _check("node", self.node, np.int32, (len(self.node),))
+        if (self.box_min is None) != (self.box_max is None):
+            raise ValueError("box_min and box_max: give both or neither")
+        n_ids = int(self.node.max()) + 1 if len(self.node) else 0
+        if self.box_min is not None:
+            _check("box_min", self.box_min, np.float32, (n_ids, 3))
+            _check("box_max", self.box_max, np.float32, (n_ids, 3))
+        if self.label is not None:
+            _check("label", self.label, np.int16, (n_ids,))
 
 
 @dataclass
@@ -181,13 +198,15 @@ class Events:
 class Boxes:
     """3D box of every mask: row i belongs to mask i of the masks stage. World frame, metres, axis-aligned.
 
-    box_min and box_max are NaN (and n_points 0) where a mask has too little valid depth.
+    box_min and box_max are NaN (and n_points 0) where a mask has too little valid depth. lift3d.reliable says which
+    masks' depth to trust.
     """
 
     box_min: np.ndarray  # (N, 3) float32
     box_max: np.ndarray  # (N, 3) float32
     n_points: np.ndarray  # (N,) int32, depth points left after outlier removal
     points: np.ndarray | None = None  # (N, P, 3) float16, a random sample of those points, NaN-padded
+    conf: np.ndarray | None = None  # (N,) float32, median depth confidence under the mask, NaN without one
 
     def __post_init__(self):
         n = len(self.box_min)
@@ -196,6 +215,8 @@ class Boxes:
         _check("n_points", self.n_points, np.int32, (n,))
         if self.points is not None:
             _check("points", self.points, np.float16, (n, None, 3))
+        if self.conf is not None:
+            _check("conf", self.conf, np.float32, (n,))
 
 
 @dataclass
@@ -258,9 +279,18 @@ class PersistentObjects:
     config: dict
     next_id: int
     last_frame: int | None
+    points: np.ndarray | None = None  # (n, P, 3) float16, a sample of each node's pooled reliable points, NaN-padded
+    track_id: np.ndarray | None = None  # (t,) int32, SAM IDs
+    track_node: np.ndarray | None = None  # (t,) int32, the node each SAM ID's masks join
+    frames: list[list[int]] | None = None  # the frames each node was seen in
 
     def __post_init__(self):
         n = len(self.object_id)
+        if self.points is not None:
+            _check("points", self.points, np.float16, (n, None, 3))
+        if self.track_id is not None:
+            _check("track_id", self.track_id, np.int32, (len(self.track_id),))
+            _check("track_node", self.track_node, np.int32, self.track_id.shape)
         _check("object_id", self.object_id, np.int32, (n,))
         for name in ("box_min", "box_max"):
             _check(name, getattr(self, name), np.float32, (n, 3))
