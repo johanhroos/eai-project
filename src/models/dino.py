@@ -43,10 +43,7 @@ class DINOEncoder:
             return_tensors="pt",
         )
 
-        inputs = {
-            key: value.to(self.device)
-            for key, value in inputs.items()
-        }
+        inputs = {key: value.to(self.device) for key, value in inputs.items()}
 
         with torch.no_grad():
             outputs = self.model(**inputs)
