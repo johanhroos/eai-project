@@ -1,10 +1,10 @@
 """Each object's box from every view of it: around the points its views agree on, so that no one view's depth sets it.
 
-Each of a node's reliable masks (lift3d.reliable) is lifted again here, from its frame's depth at the depth's own
-resolution: every pixel the mask covers more than COVER of, without the outliers of lift3d.robust_filter. Each view
+Each of a node's reliable masks (mask_boxes.reliable) is lifted again here, from its frame's depth at the depth's own
+resolution: every pixel the mask covers more than COVER of, without the outliers of depth.robust_filter. Each view
 then weighs by its pixels on the object, so close views count more than far ones, and the box can reach the object's
-ends, which the boxes stage's sample of lift3d.POINTS_PER_MASK points per mask, from the depth upsampled to the image,
-often misses. A mask too small for MIN_POINTS points at that resolution gives that sample instead.
+ends, which the boxes stage's sample of mask_boxes.POINTS_PER_MASK points per mask, from the depth upsampled to the
+image, often misses. A mask too small for MIN_POINTS points at that resolution gives that sample instead.
 
 Pooled, those points make up the object, plus wherever a view's depth was wrong: a far view's depth smears along its
 camera ray, and one streak makes the box metres long while the point cloud, which is judged by its bulk, still looks
@@ -31,8 +31,9 @@ import numpy as np
 import pycocotools.mask as mask_utils
 from PIL import Image
 
-from data.stages import Boxes, Masks, Run, load_stage
-from geometry import lift3d
+from data.stages import Boxes, Masks, Run
+from geometry import mask_boxes
+from geometry.depth import backproject, geometry_source, robust_filter
 from graph.nodes import node_box
 
 COVER = 0.5  # share of a pixel at the depth's resolution a mask must cover for the pixel to be lifted
@@ -51,38 +52,6 @@ PARAMS = {
     "trim": TRIM,
     "max_points": MAX_POINTS,
 }
-
-
-def view_source(run: Run):
-    """Returns get(frame) -> (depth (h, w) m, K (3, 3) for that size, c2w (4, 4)) at the depth's own resolution.
-
-    As lift3d.geometry_source, but at VGGT-Omega's model resolution, or every second pixel of Replica's GT depth.
-    """
-    if run.pose_source != "vggt":
-        get = lift3d.geometry_source(run)
-
-        def every_second(i):
-            depth, K, c2w = get(i)
-            return depth[::2, ::2], np.diag([0.5, 0.5, 1.0]) @ K, c2w
-
-        return every_second
-    from data import footage
-    from data.stages import Geometry
-    from models.vggt import world_from_camera
-
-    geometry = load_stage(run.stage_dir("vggt"), Geometry)
-    row = {int(f): k for k, f in enumerate(geometry.frame)}
-    height, width = footage.image_size(run)
-    h, w = geometry.depth.shape[1:]
-
-    def get(i):
-        k = row[i]
-        K = geometry.intrinsics[k].astype(np.float64).copy()
-        K[0] *= w / width
-        K[1] *= h / height
-        return geometry.depth[k].astype(np.float32) * geometry.scale, K, world_from_camera(geometry, k)
-
-    return get
 
 
 def shrink(mask: np.ndarray, size: tuple[int, int], cover: float = 0.25) -> np.ndarray:
@@ -117,17 +86,17 @@ def object_points(
     all of them are returned. object_boxes draws the boxes around these; evaluate_openlex3d.py takes them as the
     objects' point clouds.
     """
-    get = view_source(run)
+    get = geometry_source(run, full_size=False)
     views = {}  # frame -> its depth, K and c2w
     points = {}  # row of a reliable mask -> its points (k, 3)
-    lifted = np.flatnonzero((node >= 0) & lift3d.reliable(boxes))
+    lifted = np.flatnonzero((node >= 0) & mask_boxes.reliable(boxes))
     for frame in np.unique(masks.frame[lifted]).tolist():
         rows = lifted[masks.frame[lifted] == frame]
         depth, K, c2w = views[frame] = get(frame)
         stack = mask_utils.decode([masks.rle[r] for r in rows]).astype(bool)  # (H, W, k)
         for k, r in enumerate(rows.tolist()):
             mask = shrink(stack[:, :, k], depth.shape, COVER)
-            p = lift3d.robust_filter(lift3d.backproject(depth, K, c2w, mask)[0], MAD)
+            p = robust_filter(backproject(depth, K, c2w, mask)[0], MAD)
             if len(p) < MIN_POINTS and boxes.points is not None:
                 p = boxes.points[r].astype(np.float32)
                 p = p[np.isfinite(p).all(axis=1)]

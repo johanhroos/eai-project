@@ -8,11 +8,11 @@ prediction matches a GT object when their masks have IoU >= MATCH_IOU.
   IDF1      identity F1 (Ristani et al., 2016). Predictions and GT objects are paired one-to-one over the whole run so
             that the most frames match: IDTP. IDF1 = 2 IDTP / (predicted + GT detections), IDP = IDTP / predicted,
             IDR = IDTP / GT. Splitting an object over several IDs and merging objects into one ID both lower it.
-  revisits  for every GT revisit (lift3d.compute_events): is the ID that matches the object last before it leaves the
-            same as the one that matches it first after it comes back? kept or switched, or missed when no prediction
-            matches it on one side within REVISIT_WINDOW frames.
+  revisits  for every GT revisit (ground_truth.compute_events): is the ID that matches the object last before it
+            leaves the same as the one that matches it first after it comes back? kept or switched, or missed when no
+            prediction matches it on one side within REVISIT_WINDOW frames.
 
-GT objects of replica.IGNORE_CLASSES and GT detections under lift3d.MIN_PIXELS pixels are left out,
+GT objects of replica.IGNORE_CLASSES and GT detections under ground_truth.MIN_PIXELS pixels are left out,
 and so are the predictions that match them.
 
 queries scores the object map as a text search with the OpenLex3D queries (see its docstring). It works per object:
@@ -27,8 +27,8 @@ import pycocotools.mask as mask_utils
 from scipy.optimize import linear_sum_assignment
 
 from data import replica
-from data.stages import Boxes, Events, Graph, Masks, ObjectBoxes, TextAligned
-from geometry import lift3d
+from data.stages import Boxes, Events, Graph, Masks, ObjectBoxes, TextAligned, rle_area
+from evaluation import ground_truth
 from graph import edges, query
 from graph.nodes import build_nodes
 
@@ -42,7 +42,7 @@ def evaluate(masks: Masks, ids: np.ndarray, gt: Masks, events: Events, objects: 
     objects is replica.load_objects(scene), events the events stage.
     """
     ignored = {o for o, obj in objects.items() if obj.class_name in replica.IGNORE_CLASSES}
-    gt_area = lift3d.rle_area(gt.rle)
+    gt_area = rle_area(gt.rle)
     matched = Counter()  # (prediction, GT object) -> frames they match in
     best = {}  # (frame, GT object) -> the matching prediction with the highest IoU
     n_pred = n_gt = 0
@@ -50,7 +50,9 @@ def evaluate(masks: Masks, ids: np.ndarray, gt: Masks, events: Events, objects: 
         p_rows, g_rows = np.flatnonzero((masks.frame == frame) & (ids >= 0)), np.flatnonzero(gt.frame == frame)
         preds = np.unique(ids[p_rows])
         objs = gt.sam_id[g_rows]
-        counted = np.array([o not in ignored for o in objs.tolist()], bool) & (gt_area[g_rows] >= lift3d.MIN_PIXELS)
+        counted = np.array([o not in ignored for o in objs.tolist()], bool) & (
+            gt_area[g_rows] >= ground_truth.MIN_PIXELS
+        )
         n_gt += int(counted.sum())
         if not len(preds):
             continue
@@ -97,7 +99,7 @@ def revisits(best: dict, events: Events, ignored: set) -> dict:
     outcome = Counter(kept=0, switched=0, missed=0)
     for o, ev in events_of.items():
         for (left, k1), (back, k2) in zip(ev[::2], ev[1::2], strict=True):
-            if (k1, k2) != (lift3d.KIND["hidden"], lift3d.KIND["revisited"]):
+            if (k1, k2) != (ground_truth.KIND["hidden"], ground_truth.KIND["revisited"]):
                 raise ValueError(f"object {o}: events out of order at frames {left}, {back}")
             before = [f for f in frames_of[o] if left - REVISIT_WINDOW < f <= left]
             after = [f for f in frames_of[o] if back <= f < back + REVISIT_WINDOW]
@@ -138,17 +140,17 @@ def queries(
     """How well the objects in ids are found by text: every query ranks all of them (graph.query).
 
     targets maps each query to the GT objects it describes (replica.load_queries) and text_emb holds the queries'
-    embeddings in the same order. Queries whose objects are never seen in the run (lift3d.MIN_PIXELS) are left out, and
-    so are those objects. Walking down a query's ranking, an object is a hit when it stands for (owners) a target that
-    is not found yet. Anything else counts against it: an object that stands for nothing, for another object, or for a
-    target already found, which is a duplicate in the map.
+    embeddings in the same order. Queries whose objects are never seen in the run (ground_truth.MIN_PIXELS) are left
+    out, and so are those objects. Walking down a query's ranking, an object is a hit when it stands for (owners) a
+    target that is not found yet. Anything else counts against it: an object that stands for nothing, for another
+    object, or for a target already found, which is a duplicate in the map.
 
       map        mean over queries of the average precision: the mean, over the query's targets, of the precision at
                  the rank where each is found, 0 for one never found
       top1       share of queries whose first object is a hit
       reachable  share of the targets that some object stands for: the recall a perfect ranking would get
     """
-    seen = set(gt.sam_id[lift3d.rle_area(gt.rle) >= lift3d.MIN_PIXELS].tolist())
+    seen = set(gt.sam_id[rle_area(gt.rle) >= ground_truth.MIN_PIXELS].tolist())
     keep = [i for i, objs in enumerate(targets.values()) if seen & set(objs)]
     sets = [seen & set(list(targets.values())[i]) for i in keep]
     owner = owners(masks, ids, gt)
@@ -185,12 +187,12 @@ def nearest_objects(
 ) -> dict:
     """How often the map finds the nearest object of a type (graph.query --near), against the GT boxes.
 
-    Every GT object A that is seen in the run (lift3d.MIN_PIXELS) asks for the nearest object of every class C that has
-    at least two other seen objects, so that it matters which one comes first. The answer is the C object nearest to A
-    by their GT boxes (gt_boxes stage), ranked as graph.edges.nearest ranks nodes. In the map, A is the node that
-    stands for it (owners) and is seen in the most frames, and the candidates are ranked by their boxes (graph.node).
-    The query is right when the first candidate stands for the answer. A query whose A no node stands for is wrong.
-    Nodes that stand for A itself are never candidates: a duplicate of the anchor isn't another object.
+    Every GT object A that is seen in the run (ground_truth.MIN_PIXELS) asks for the nearest object of every class C
+    that has at least two other seen objects, so that it matters which one comes first. The answer is the C object
+    nearest to A by their GT boxes (gt_boxes stage), ranked as graph.edges.nearest ranks nodes. In the map, A is the
+    node that stands for it (owners) and is seen in the most frames, and the candidates are ranked by their boxes
+    (graph.nodes). The query is right when the first candidate stands for the answer. A query whose A no node stands for
+    is wrong. Nodes that stand for A itself are never candidates: a duplicate of the anchor isn't another object.
 
       labels  the candidates are the nodes labelled C, as for graph.query --near
       oracle  the candidates are the nodes that stand for an object of class C: only the map's boxes and identities
@@ -213,7 +215,7 @@ def nearest_objects(
     labels = np.array([n.label for n in nodes])
     n_frames = np.array([len(n.frames) for n in nodes])
 
-    seen = set(gt.sam_id[lift3d.rle_area(gt.rle) >= lift3d.MIN_PIXELS].tolist())
+    seen = set(gt.sam_id[rle_area(gt.rle) >= ground_truth.MIN_PIXELS].tolist())
     keep = [
         k
         for k, o in enumerate(gt_boxes.object_id.tolist())

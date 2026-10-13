@@ -5,7 +5,21 @@ from pathlib import Path
 import numpy as np
 import pycocotools.mask as mask_utils
 
-from data.paths import OUTPUT_DIR, STAGE_KEYS
+from data.paths import OUTPUT_DIR
+
+# The Run fields a stage's directory depends on
+STAGE_KEYS = {
+    "masks": ("mask_source", "vocab"),
+    "features": ("mask_source", "vocab"),
+    "siglip": ("mask_source", "vocab"),
+    "boxes": ("mask_source", "vocab", "pose_source"),
+    "graph": ("mask_source", "vocab", "pose_source"),
+    "eval": ("mask_source", "vocab", "pose_source"),
+    "events": (),
+    "vggt": (),
+    "frames": (),
+    "gt_boxes": (),
+}
 
 
 def _check(name: str, a, dtype, shape: tuple) -> None:
@@ -87,6 +101,23 @@ def encode_rle(masks: np.ndarray) -> list[dict]:
     # pycocotools wants a Fortran-ordered (H, W, N) uint8 stack and returns counts as bytes, which JSON can't hold
     rles = mask_utils.encode(masks.transpose(1, 2, 0).astype(np.uint8, order="F"))
     return [{"size": r["size"], "counts": r["counts"].decode("ascii")} for r in rles]
+
+
+def rle_area(rles: list[dict], chunk=255) -> np.ndarray:
+    """Pixel count of each RLE mask. pycocotools.mask.area fails on NumPy 2 for more than 255 masks at once."""
+    if not rles:
+        return np.zeros(0, np.int64)
+    return np.concatenate([mask_utils.area(rles[i : i + chunk]) for i in range(0, len(rles), chunk)]).astype(np.int64)
+
+
+def bounding_boxes(rle: list[dict]) -> np.ndarray:
+    """(N, 4) int32 bounding boxes (x0, y0, x1, y1) of Masks.rle rows, so image[y0:y1, x0:x1] crops mask i.
+
+    An empty mask gets the box (0, 0, 0, 0), so check x1 > x0 before cropping.
+    """
+    # toBbox gives COCO (x, y, w, h) with integer values, and a flat array when rle is empty
+    xywh = mask_utils.toBbox(rle).reshape(-1, 4).astype(np.int32)
+    return np.concatenate([xywh[:, :2], xywh[:, :2] + xywh[:, 2:]], axis=1)
 
 
 def check_aligned(run: Run, stage: str) -> None:
@@ -197,7 +228,7 @@ class Events:
 class Boxes:
     """3D box of every mask: row i belongs to mask i of the masks stage. World frame, metres, axis-aligned.
 
-    box_min and box_max are NaN (and n_points 0) where a mask has too little valid depth. lift3d.reliable says which
+    box_min and box_max are NaN (and n_points 0) where a mask has too little valid depth. mask_boxes.reliable says which
     masks' depth to trust.
     """
 

@@ -38,8 +38,8 @@ from data.stages import (
     load_stage,
     save_stage,
 )
-from evaluation import metrics
-from geometry import lift3d
+from evaluation import ground_truth, metrics
+from geometry import mask_boxes
 from graph import build
 from graph.memory import AssociationConfig
 from models import dino, sam, siglip, vggt
@@ -203,9 +203,9 @@ for run in runs:
             )
         free_gpu()
 
-    if stale(run, "boxes", {"points_per_mask": lift3d.POINTS_PER_MASK, "conf": "median"}):
-        meta = {"pose_source": run.pose_source, "points_per_mask": lift3d.POINTS_PER_MASK, "conf": "median"}
-        save_stage(run.stage_dir("boxes"), lift3d.compute_boxes(run, masks), meta)
+    if stale(run, "boxes", {"points_per_mask": mask_boxes.POINTS_PER_MASK, "conf": "median"}):
+        meta = {"pose_source": run.pose_source, "points_per_mask": mask_boxes.POINTS_PER_MASK, "conf": "median"}
+        save_stage(run.stage_dir("boxes"), mask_boxes.compute_boxes(run, masks), meta)
         check_aligned(run, "boxes")
         print(f"Saved boxes to {run.stage_dir('boxes')}")
     boxes = load_stage(run.stage_dir("boxes"), Boxes)
@@ -234,13 +234,13 @@ for run in runs:
 
     # Ground truth for the evaluation: always from GT masks and poses, whatever mask_source and pose_source are
     if stale(run, "events"):
-        meta = {"min_pixels": lift3d.MIN_PIXELS, "min_run": lift3d.MIN_RUN, "min_gap": lift3d.MIN_GAP}
-        save_stage(run.stage_dir("events"), lift3d.compute_events(run), {**meta, "kinds": lift3d.KIND})
+        meta = {"min_pixels": ground_truth.MIN_PIXELS, "min_run": ground_truth.MIN_RUN, "min_gap": ground_truth.MIN_GAP}
+        save_stage(run.stage_dir("events"), ground_truth.compute_events(run), {**meta, "kinds": ground_truth.KIND})
         print(f"Saved events to {run.stage_dir('events')}")
 
     # FOR EVALUATION: always from GT masks and poses, whatever mask_source and pose_source are
     if stale(run, "gt_boxes"):
-        save_stage(run.stage_dir("gt_boxes"), lift3d.compute_gt_boxes(run), {})
+        save_stage(run.stage_dir("gt_boxes"), ground_truth.compute_gt_boxes(run), {})
         print(f"Saved GT boxes to {run.stage_dir('gt_boxes')}")
 
     # Evaluation: cheap, so always recomputed. The raw SAM tracks show what the graph adds.

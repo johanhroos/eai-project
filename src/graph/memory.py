@@ -22,12 +22,12 @@ joins that node. DINO appearance and 3D location decide the rest:
          an object back in view under a new SAM ID, or one first seen too far away to match
 
 A match scores DINO appearance and location. The DINO cosine is clipped to [0, 1] and geometry is in [0, 1]: how
-much of the smaller box lies inside the other (lift3d.box_containment), and how close the centres are. Containment
+much of the smaller box lies inside the other (mask_boxes.box_containment), and how close the centres are. Containment
 rather than IoU, since a view of part of an object lies inside the object's box, which has grown to all its views, and
 IoU would score it near 0. Enabled nonnegative weights are normalized once. Missing cues score zero with no per-pair
 weight renormalization, so a match with less evidence cannot inflate its score.
 
-Only reliable masks (lift3d.reliable: enough depth, and confident where the depth has a confidence) are evidence.
+Only reliable masks (mask_boxes.reliable: enough depth, and confident where the depth has a confidence) are evidence.
 The others join their track's node but don't add to its box or DINO descriptors, and don't cut, match or merge: a
 far view's depth smears along the camera ray and its crop is a few pixels. A node's box is around the pooled points of
 its reliable masks without the outer 2% (graph.nodes.node_box), so it covers every part any view saw, but no single
@@ -41,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
-from geometry.lift3d import MIN_CONFIDENCE, Box3D, box_containment
+from geometry.mask_boxes import MIN_CONFIDENCE, Box3D, box_containment
 from graph.nodes import fit_box
 
 
@@ -116,7 +116,7 @@ class AssociationConfig:
         return cls(**json.loads(Path(path).read_text()))
 
     def metadata(self) -> dict:
-        # The reliable masks depend on lift3d.MIN_CONFIDENCE too, so a new value rebuilds the graph
+        # The reliable masks depend on mask_boxes.MIN_CONFIDENCE too, so a new value rebuilds the graph
         return {"algorithm": "track-association-v2", "config": asdict(self), "min_confidence": MIN_CONFIDENCE}
 
 
@@ -181,7 +181,7 @@ class Observation:
     label: str | None = None
     sam_ids: tuple[int, ...] | int | None = ()  # the SAM tracks of its masks: which node it follows, never an ID
     siglip: np.ndarray | None = None
-    reliable: bool = True  # whether its depth is trusted (lift3d.reliable); if not, it only follows its track
+    reliable: bool = True  # whether its depth is trusted (mask_boxes.reliable); if not, it only follows its track
     points: np.ndarray | None = None  # (k, 3) its reliable masks' points; None: the corners of its box
     conf: float = float("nan")  # confidence of its depth, which picks a node's box while no view is reliable
 
