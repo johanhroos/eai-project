@@ -13,11 +13,11 @@ In a notebook (the kernel must see the project's packages):
 
     rr.init("map")
     rr.notebook_show(height=700)
-    map_view.log_map(footage.make_run("phone/IMG_0644", 1, "sam3", None, "IMG_0644"))
+    rerun_map.log_map(footage.make_run("phone/IMG_0644", 1, "sam3", None, "IMG_0644"))
 
 To a file the Rerun viewer opens (rerun <file>, with the same version as rerun-sdk here):
 
-    uv run --no-sync python -m utils.map_view --source phone/IMG_0644 --stride 1 --vocab data/vocab/IMG_0644.txt
+    uv run --no-sync python -m views.rerun_map --source phone/IMG_0644 --stride 1 --vocab data/vocab/IMG_0644.txt
 """
 
 import json
@@ -28,11 +28,12 @@ import rerun.blueprint as rrb
 from PIL import Image
 from scipy.ndimage import maximum_filter, minimum_filter
 
+from data import footage, replica
+from data.stages import Boxes, Graph, Masks, Run, load_stage
+from geometry import lift3d
 from graph.edges import build_edges
-from graph.node import build_nodes
+from graph.nodes import build_nodes
 from models.sam import mask_boxes
-from utils import footage, lift3d, replica
-from utils.schema import Boxes, Graph, Masks, Run, load_stage
 
 FUSED_FRAMES = 40  # frames whose depth makes up the point cloud
 PIXEL_STEP = 2  # every PIXEL_STEP-th pixel in both directions
@@ -72,7 +73,7 @@ def log_map(run: Run) -> None:
     edges = build_edges(nodes)
     nodes = [n for n in nodes if n.label not in replica.IGNORE_CLASSES]  # walls and floors, as in the evaluation
 
-    # Each object keeps the colour utils/video.py gives it: that of its largest SAM track
+    # Each object keeps the colour views/video.py gives it: that of its largest SAM track
     track_colour = np.random.default_rng(0).uniform(90, 255, (int(masks.sam_id.max()) + 1, 3)).astype(np.uint8)
     colour = {n.id: track_colour[np.bincount(masks.sam_id[n.rows]).argmax()] for n in nodes}
     rr.send_blueprint(
@@ -174,7 +175,7 @@ def log_map(run: Run) -> None:
 if __name__ == "__main__":
     import argparse
 
-    from utils import vocab
+    from data import vocab
 
     parser = argparse.ArgumentParser(description="Save a run's map as a Rerun recording, eval/map.rrd.")
     parser.add_argument("--source", required=True)

@@ -4,8 +4,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from utils.lift3d import reliable
-from utils.schema import Boxes, Graph, Masks
+from data.stages import Boxes, Graph, Masks
+from geometry.lift3d import reliable
 
 
 @dataclass
@@ -56,8 +56,8 @@ def node_box(boxes: Boxes, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     The views each see part of the object, so their pooled points cover the space it fills, also behind occluders.
     Pooling rather than the union of the masks' boxes keeps one view's stray depth from setting the box. Without a
     reliable mask, the box of the mask with the most confident depth; NaN if none of the masks has a box.
-    graph.association.ObjectMemory keeps its nodes' boxes by the same rule. A saved graph has better ones, from every
-    view of each node (graph/shape.py).
+    graph.memory.ObjectMemory keeps its nodes' boxes by the same rule. A saved graph has better ones, from every
+    view of each node (graph/multiview.py).
     """
     good = rows[reliable(boxes)[rows]]
     if len(good):
@@ -71,7 +71,7 @@ def node_box(boxes: Boxes, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 def build_nodes(masks: Masks, boxes: Boxes, graph: Graph, vocab: list[str]) -> list[Node]:
     """The graph's nodes in ID order. vocab is the masks stage's metadata["vocab"]. Rows with node -1 are left out.
 
-    The boxes and labels are the graph's own (graph/shape.py, graph/refine.py) where it has them, else node_box's
+    The boxes and labels are the graph's own (graph/multiview.py, graph/refine.py) where it has them, else node_box's
     and the prompt with the most SAM score.
     """
     nodes = []
@@ -100,7 +100,7 @@ def build_nodes(masks: Masks, boxes: Boxes, graph: Graph, vocab: list[str]) -> l
 
 
 def colours(masks: Masks, node: np.ndarray) -> tuple[np.ndarray, dict[int, np.ndarray]]:
-    """The colours utils/video.py, map_view and graph/plot_edges.py share.
+    """The colours views/video.py, rerun_map and views/top_down.py share.
 
     Returns (n_tracks, 3) uint8 colours by SAM ID, and by node ID the colour of the node's largest track.
     """

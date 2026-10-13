@@ -13,11 +13,11 @@ from pathlib import Path
 import numpy as np
 import pycocotools.mask as mask_utils
 
-from graph import refine, shape
-from graph.association import AssociationConfig, ObjectMemory, Observation, normalized
-from graph.node import fit_box, mask_points, most_confident
-from utils.lift3d import Box3D, reliable
-from utils.schema import Boxes, Features, Graph, Masks, Run, TextAligned, load_stage, save_stage
+from data.stages import Boxes, Features, Graph, Masks, Run, TextAligned, load_stage, save_stage
+from geometry.lift3d import Box3D, reliable
+from graph import multiview, refine
+from graph.memory import AssociationConfig, ObjectMemory, Observation, normalized
+from graph.nodes import fit_box, mask_points, most_confident
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "association.json"
 
@@ -130,7 +130,7 @@ def metadata(config: AssociationConfig, finished: bool = True) -> dict:
     return {
         **config.metadata(),
         "refine": refine.PARAMS if finished else None,
-        "object_boxes": shape.PARAMS if finished else None,
+        "object_boxes": multiview.PARAMS if finished else None,
     }
 
 
@@ -165,9 +165,9 @@ def finish(
     """The graph stage's last steps, on the memory's node of every mask, once every frame is in.
 
     graph/refine.py splits, merges and drops nodes (-1 for the masks of dropped ones) and labels them from all their
-    views (SAM's votes weighed by SigLIP), the nodes left are numbered 0, 1, ..., and graph/shape.py draws each one's
-    box from every view of it. Returns the node of every mask; box_min, box_max and the label (an index into vocab) by
-    node ID; and refine's record of what it did, with "graph_ids" from its node IDs to the saved ones.
+    views (SAM's votes weighed by SigLIP), the nodes left are numbered 0, 1, ..., and graph/multiview.py draws each
+    one's box from every view of it. Returns the node of every mask; box_min, box_max and the label (an index into
+    vocab) by node ID; and refine's record of what it did, with "graph_ids" from its node IDs to the saved ones.
     """
     text = vocab_text(run, vocab)
     refined, label, record = refine.refine(run, masks, boxes, features, emb, text, node)
@@ -176,15 +176,15 @@ def finish(
     final = np.where(refined >= 0, np.searchsorted(used, refined), -1).astype(np.int32)
     record["graph_ids"] = {int(n): k for k, n in enumerate(used.tolist())}
     labels = np.array([label[n] for n in used.tolist()], np.int16)
-    return (final, *shape.object_boxes(run, masks, boxes, final), labels, record)
+    return (final, *multiview.object_boxes(run, masks, boxes, final), labels, record)
 
 
 def save_result(path: Path, result: BuildResult, finish: Finish | None = None) -> None:
     """Save the graph stage with its node IDs renumbered 0, 1, ... (graph.query and graph.edges index nodes by ID).
 
-    finish(node), such as pipeline.finish for the run, takes the memory's node of every mask and gives the saved one
+    finish(node), such as build.finish for the run, takes the memory's node of every mask and gives the saved one
     (-1 for none), the saved nodes' boxes and labels, and a record, saved as refine.json. Without it the memory's nodes
-    are saved as they are, without boxes or labels: graph.node.build_nodes then draws the boxes around the pooled
+    are saved as they are, without boxes or labels: graph.nodes.build_nodes then draws the boxes around the pooled
     points and counts SAM's votes for the labels. refine.json's "memory_to_graph" maps each of the memory's nodes to
     the saved node that holds most of its masks (null if it holds none). The traces get the saved IDs: a match's
     object_id is the node of its masks, and a merge's trace keeps the IDs of the time and adds the saved node as
@@ -235,7 +235,7 @@ def cached_observations(run: Run):
 
 def rebuild(run: Run, config: AssociationConfig | None = None, save: bool = True) -> BuildResult:
     # Source frame numbers include frames with no detections.
-    from utils import footage
+    from data import footage
 
     observations = cached_observations(run)
     result = replay(*observations, config=config, frames=footage.frame_numbers(run))

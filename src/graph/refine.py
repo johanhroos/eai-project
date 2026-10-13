@@ -1,6 +1,6 @@
 """Whole-video fixes to the object memory's nodes, once every frame is in: split, label, merge, and keep the sure ones.
 
-The scene is static, and the whole video is in. The memory (graph/association.py) decides one frame at a time; seen
+The scene is static, and the whole video is in. The memory (graph/memory.py) decides one frame at a time; seen
 whole, some of its nodes are wrong in ways only 3D shows. Like ConceptGraphs' post-processing (Gu et al., 2023: DBSCAN
 denoising, merging objects whose points overlap, dropping objects seen in under 3 detections), this keeps fewer
 objects rather than more, and only those whose box can be trusted:
@@ -51,10 +51,10 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
-from graph import shape
-from graph.node import mask_points
-from utils import lift3d
-from utils.schema import Boxes, Features, Masks, Run, TextAligned
+from data.stages import Boxes, Features, Masks, Run, TextAligned
+from geometry import lift3d
+from graph import multiview
+from graph.nodes import mask_points
 
 VOXEL = 0.1  # metres: side of the cubes a node's points are clustered in
 DENSITY = 0.1  # share of the node's typical cube (the one its average point is in) a cube must hold to be in a cluster
@@ -72,7 +72,7 @@ MIN_OBSERVERS = 3  # frames that must see both nodes, with one of them in a mask
 LABEL_SCALE = 100.0  # SigLIP cosines are multiplied by this in the softmax that weighs SAM's votes for a label
 DUPLICATE = 0.9  # share of the smaller node's mask inside the other's, median over frames with both, to be one object
 MIN_SHARED = 2  # frames two nodes must share before they count as duplicates
-DUPLICATE_NEST = 0.5  # share of the smaller duplicate's box (graph/shape.py's) that must lie inside the other's
+DUPLICATE_NEST = 0.5  # share of the smaller duplicate's box (graph/multiview.py's) that must lie inside the other's
 SIGHTING_POINTS = 512  # of a node's points projected into every frame for its sightings
 MIN_MASKS = 3  # nodes with fewer masks are dropped, as ConceptGraphs drops objects in under 3 detections
 MIN_COVER = 0.7  # mean share of a node's points in view that lie inside its own mask, over its frames
@@ -288,7 +288,7 @@ def merge(
 def project(points: np.ndarray, depth: np.ndarray, K: np.ndarray, c2w: np.ndarray):
     """Pixels u and v of (k, 3) points in a view, and whether each is seen: in the image and not hidden.
 
-    Hidden is further behind the view's depth there than graph/shape.py's HIDDEN. Points not seen get pixel (0, 0).
+    Hidden is further behind the view's depth there than graph/multiview.py's HIDDEN. Points not seen get pixel (0, 0).
     """
     h, w = depth.shape
     w2c = np.linalg.inv(c2w)
@@ -299,7 +299,7 @@ def project(points: np.ndarray, depth: np.ndarray, K: np.ndarray, c2w: np.ndarra
     seen = (cam[:, 2] > 0.05) & (u >= 0) & (u < w) & (v >= 0) & (v < h)
     u, v = np.where(seen, u, 0), np.where(seen, v, 0)
     there = depth[v, u]
-    seen &= cam[:, 2] <= there + np.maximum(shape.HIDDEN[0], shape.HIDDEN[1] * there)
+    seen &= cam[:, 2] <= there + np.maximum(multiview.HIDDEN[0], multiview.HIDDEN[1] * there)
     return u, v, seen
 
 
@@ -315,7 +315,7 @@ def quality(run: Run, masks: Masks, boxes: Boxes, node: np.ndarray) -> dict[int,
               from one direction has a depth extent no other view checked.
     """
     trusted = lift3d.reliable(boxes)
-    get = shape.view_source(run)
+    get = multiview.view_source(run)
     ids = np.unique(node[node >= 0]).tolist()
     points = {n: spread(node_points(boxes, np.flatnonzero(node == n)), SIGHTING_POINTS) for n in ids}
     covers = {n: [] for n in ids}
@@ -330,7 +330,7 @@ def quality(run: Run, masks: Masks, boxes: Boxes, node: np.ndarray) -> dict[int,
                 continue
             u, v, seen = project(points[n], depth, K, c2w)
             if seen.sum() >= 20:
-                mask = shape.shrink(stack[:, :, node[rows] == n].any(axis=2), depth.shape)
+                mask = multiview.shrink(stack[:, :, node[rows] == n].any(axis=2), depth.shape)
                 covers[n].append(float(mask[v[seen], u[seen]].mean()))
     out = {}
     for n in ids:
@@ -351,9 +351,9 @@ def sightings(
     """By frame, the nodes it sees, each with the rows of the frame's masks that hold it.
 
     points holds each node's points by ID. A frame sees a node when at least visible of its points are in the image
-    and not hidden (as in graph/shape.py), and a mask holds it when at least contained of those lie inside the mask.
+    and not hidden (as in graph/multiview.py), and a mask holds it when at least contained of those lie inside the mask.
     """
-    get = shape.view_source(run)
+    get = multiview.view_source(run)
     ids = list(points)
     stacked = np.concatenate([points[n] for n in ids])
     owner = np.repeat(np.arange(len(ids)), [len(points[n]) for n in ids])
@@ -368,7 +368,7 @@ def sightings(
             continue
         rows = np.flatnonzero(masks.frame == frame)
         stack = mask_utils.decode([masks.rle[r] for r in rows]).astype(bool)
-        small = [shape.shrink(stack[:, :, k], (h, w)) for k in range(len(rows))]
+        small = [multiview.shrink(stack[:, :, k], (h, w)) for k in range(len(rows))]
         view = {}
         for i in in_view.tolist():
             pick = seen & (owner == i)
@@ -495,7 +495,7 @@ def consensus_merge(
 
 def camera_centres(run: Run, frames) -> dict[int, np.ndarray]:
     """The camera's position in the world (metres) in each of frames."""
-    get = shape.view_source(run)
+    get = multiview.view_source(run)
     return {int(f): get(int(f))[2][:3, 3] for f in np.unique(frames).tolist()}
 
 
@@ -573,7 +573,7 @@ def refine(
     """
     p = {**PARAMS, **params}
     node, splits = split(masks, boxes, node, p["voxel"], p["density"], p["split_gap"])
-    lo, hi = shape.object_boxes(run, masks, boxes, node)
+    lo, hi = multiview.object_boxes(run, masks, boxes, node)
     label = labels(masks, node, emb, text, p["label_scale"])
     apart = [s["parts"] for s in splits]
     node, duplicates = duplicate_merge(

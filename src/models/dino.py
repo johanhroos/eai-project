@@ -6,10 +6,10 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoImageProcessor, AutoModel
 
+from data import footage
+from data.stages import Features, Masks, Run
+from models.crops import pad_bbox
 from models.sam import mask_boxes
-from utils import footage
-from utils.image_crop import pad_bbox
-from utils.schema import Features, Masks, Run
 
 # Usage:
 # 1. Create a DINOEncoder with the desired DINO model.

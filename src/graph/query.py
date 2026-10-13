@@ -16,7 +16,7 @@ Run it to search a run's graph, after run.py has cached the stages:
 
 import numpy as np
 
-from utils.schema import Masks, TextAligned
+from data.stages import Masks, TextAligned
 
 
 def object_embeddings(masks: Masks, emb: TextAligned, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -57,11 +57,11 @@ if __name__ == "__main__":
     import argparse
     import json
 
+    from data import footage, vocab
+    from data.stages import Boxes, Graph, load_stage
     from graph import edges as graph_edges
-    from graph.node import build_nodes
+    from graph.nodes import build_nodes
     from models import siglip
-    from utils import footage, vocab
-    from utils.schema import Boxes, Graph, load_stage
 
     parser = argparse.ArgumentParser(description="Print the graph nodes that best match a text.")
     parser.add_argument("text", nargs="*", help="what to look for, such as: striped pillow")

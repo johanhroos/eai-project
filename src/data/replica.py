@@ -11,8 +11,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from utils.config import DATA_DIR
-from utils.schema import Masks, Run, encode_rle
+from data.paths import DATA_DIR
+from data.stages import Masks, Run, encode_rle
 
 SCENES = ["room_0", "room_1", "room_2", "office_0", "office_1", "office_2", "office_3", "office_4"]
 N_FRAMES = 2000

@@ -32,8 +32,8 @@ from vggt_omega.models import VGGTOmega
 from vggt_omega.utils.load_fn import load_and_preprocess_images
 from vggt_omega.utils.pose_enc import encoding_to_camera
 
-from utils import footage, replica
-from utils.schema import Geometry, Run
+from data import footage, replica
+from data.stages import Geometry, Run
 
 REPO_ID = "facebook/VGGT-Omega"
 CHECKPOINT = "vggt_omega_1b_512.pt"  # the authors' choice for new data; 416 is their benchmark reproduction

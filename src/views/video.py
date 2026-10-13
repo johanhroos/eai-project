@@ -23,9 +23,10 @@ from PIL import Image, ImageDraw, ImageFont
 from scipy.ndimage import binary_erosion
 from torchcodec.encoders import VideoEncoder
 
-from graph.node import build_nodes
-from utils import footage, lift3d, replica, vocab
-from utils.schema import Boxes, Graph, Masks, Run, load_stage
+from data import footage, replica, vocab
+from data.stages import Boxes, Graph, Masks, Run, load_stage
+from geometry import lift3d
+from graph.nodes import build_nodes
 
 TITLES = {"tracks": "SAM tracks", "graph": "graph nodes", "gt": "ground truth"}
 METRICS = {"tracks": "tracks, no graph", "graph": "graph"}  # names in eval/metrics.json

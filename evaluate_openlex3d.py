@@ -3,11 +3,13 @@
 OpenLex3D (github.com/openlex3d/openlex3d, Kassab et al., NeurIPS 2025) scores ConceptGraphs, HOV-SG, OpenMask3D and
 Kassab2024 on the same 8 Replica scenes, and publishes their predictions.
 
-evaluate.py scores whole objects against the GT masks of the frames; OpenLex3D scores points against Replica's mesh.
+evaluation/metrics.py scores whole objects against the GT masks of the frames; OpenLex3D scores points against
+Replica's mesh.
 A run's map is exported in OpenLex3D's prediction format, one directory per scene, PREDICTIONS/<method>/replica/<scene>:
 
   point_cloud.pcd  each object as a node is: its box with its points, those its views agree on that lie inside the
-                   box (graph.shape.object_points, inside_boxes), at most one per VOXEL cube, in Replica's mesh frame
+                   box (graph.multiview.object_points, inside_boxes), at most one per VOXEL cube, in Replica's mesh
+                   frame
   index.npy        (n_points,) int64, the row of embeddings.npy of each point
   embeddings.npy   (n_objects, D) float32, each object's SigLIP 2 embedding: the mean over its masks, as graph.query
                    searches them (graph.query.object_embeddings)
@@ -57,9 +59,9 @@ from pathlib import Path
 
 import numpy as np
 
-from utils import footage, replica, vocab
-from utils.config import DATA_DIR, OUTPUT_DIR
-from utils.schema import Boxes, Graph, Masks, Run, TextAligned, load_stage
+from data import footage, replica, vocab
+from data.paths import DATA_DIR, OUTPUT_DIR
+from data.stages import Boxes, Graph, Masks, Run, TextAligned, load_stage
 
 PREDICTIONS = OUTPUT_DIR / "openlex3d" / "predictions"  # PREDICTIONS/<method>/replica/<scene>, as OpenLex3D expects
 RESULTS = OUTPUT_DIR / "openlex3d" / "results"
@@ -114,11 +116,11 @@ def object_ids(run: Run, variant: str, masks: Masks) -> np.ndarray:
     if variant == "graph":
         return load_stage(run.stage_dir("graph"), Graph).node
     if variant == "memory":  # replayed with the settings the graph stage was built with
-        from graph import pipeline
-        from graph.association import AssociationConfig
+        from graph import build
+        from graph.memory import AssociationConfig
 
         graph_metadata = json.loads((run.stage_dir("graph") / "metadata.json").read_text())
-        return pipeline.rebuild(run, AssociationConfig(**graph_metadata["config"]), save=False).graph.node
+        return build.rebuild(run, AssociationConfig(**graph_metadata["config"]), save=False).graph.node
     raise ValueError(f"unknown variant {variant!r}")
 
 
@@ -130,8 +132,8 @@ def to_replica_frame(run: Run) -> tuple[np.ndarray, float]:
     """
     if run.pose_source == "gt":
         return np.eye(4), 0.0
+    from data.stages import Geometry
     from models.vggt import umeyama, world_from_camera
-    from utils.schema import Geometry
 
     geometry = load_stage(run.stage_dir("vggt"), Geometry)
     ours = np.array([world_from_camera(geometry, k)[:3, 3] for k in range(len(geometry.frame))])
@@ -143,12 +145,13 @@ def to_replica_frame(run: Run) -> tuple[np.ndarray, float]:
 
 
 def inside_boxes(kept: dict[int, np.ndarray], graph: Graph | None = None) -> dict[int, np.ndarray]:
-    """Each node's points (graph.shape.object_points) inside its box, so that a node is its box with its points.
+    """Each node's points (graph.multiview.object_points) inside its box, so that a node is its box with its points.
 
     The box is the graph stage's own where it has one (graph is that stage, whose node IDs key kept); otherwise it is
-    drawn as graph.shape.object_boxes draws it, without the outer TRIM percent of the points on each side of each axis.
+    drawn as graph.multiview.object_boxes draws it, without the outer TRIM percent of the points on each side of each
+    axis.
     """
-    from graph.shape import TRIM
+    from graph.multiview import TRIM
 
     clipped = {}
     for n, points in kept.items():
@@ -165,7 +168,7 @@ def prediction(run: Run, variant: str) -> tuple[np.ndarray, np.ndarray, np.ndarr
 
     Returns points (n, 3) float32 in Replica's frame, index (n,) int64 and embeddings (m, D) float32.
     """
-    from graph import shape
+    from graph import multiview
     from graph.query import object_embeddings
 
     masks = load_stage(run.stage_dir("masks"), Masks)
@@ -173,7 +176,7 @@ def prediction(run: Run, variant: str) -> tuple[np.ndarray, np.ndarray, np.ndarr
     emb = load_stage(run.stage_dir("siglip"), TextAligned)
     ids = object_ids(run, variant, masks)
     graph = load_stage(run.stage_dir("graph"), Graph) if variant == "graph" else None
-    kept = inside_boxes(shape.object_points(run, masks, boxes, ids, max_points=None, voxel=VOXEL), graph)
+    kept = inside_boxes(multiview.object_points(run, masks, boxes, ids, max_points=None, voxel=VOXEL), graph)
     objects, object_emb = object_embeddings(masks, emb, ids)
     with_points = [n for n in objects.tolist() if len(kept.get(n, ()))]
     row = {int(o): k for k, o in enumerate(objects.tolist())}

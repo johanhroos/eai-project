@@ -9,7 +9,7 @@ Walls, floors and ceilings (STRUCTURE) get no edges: they touch almost everythin
 over MAX_SIDE, such as a rug, or a node whose box spans the room because a SAM mask spilled onto the background.
 The nodes' boxes are world frame with z up (Replica's, or VGGT-Omega's after models/vggt.py).
 
-Edges are cheap to compute from the nodes, so like graph/node.py they aren't a stage of their own.
+Edges are cheap to compute from the nodes, so like graph/nodes.py they aren't a stage of their own.
 
 From the shell, after run.py has cached the stages:
 
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from graph.node import Node
+from graph.nodes import Node
 
 NEAR = 0.25  # metres between two boxes up to which their nodes get a "near" edge
 ON_GAP = 0.1  # metres a's bottom may be above b's top for "a on b"
@@ -114,7 +114,7 @@ def nearest(nodes: list[Node], anchor: int, candidates: list[int]) -> list[tuple
 
 
 def nearest_boxes(lo: np.ndarray, hi: np.ndarray, anchor: int, candidates: list[int]) -> list[tuple[int, float, float]]:
-    """Like nearest, for any (M, 3) boxes such as the GT objects' (evaluate.nearest_objects): rows, not node IDs."""
+    """Like nearest, for any (M, 3) boxes such as the GT objects' (metrics.nearest_objects): rows, not node IDs."""
     a_lo, a_hi = lo[anchor : anchor + 1], hi[anchor : anchor + 1]
     gap = np.linalg.norm(np.clip(np.maximum(lo - a_hi, a_lo - hi), 0, None), axis=1)  # as box_gap, for one row
     centre = np.linalg.norm((lo + hi) / 2 - (a_lo + a_hi) / 2, axis=1)
@@ -128,9 +128,9 @@ if __name__ == "__main__":
     import json
     from collections import Counter
 
-    from graph.node import build_nodes
-    from utils import footage, vocab
-    from utils.schema import Boxes, Graph, Masks, load_stage
+    from data import footage, vocab
+    from data.stages import Boxes, Graph, Masks, load_stage
+    from graph.nodes import build_nodes
 
     parser = argparse.ArgumentParser(description="Print the edges of a run's graph.")
     parser.add_argument("--source", default="replica/room_0/00")

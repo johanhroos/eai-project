@@ -1,13 +1,13 @@
 """A picture of a run's graph from above: every node as its 3D box, and the edges between them (graph/edges.py).
 
-Each node is drawn as its box seen from above, in the colour utils/video.py gives it and labelled with its label and
+Each node is drawn as its box seen from above, in the colour views/video.py gives it and labelled with its label and
 ID. "on" edges are arrows from the node on top to the one under it, "near" edges thin dashed lines between the box
 centres. Nodes without edges (walls, floors, ceilings and nodes with a box side over edges.MAX_SIDE) are left out, as
-in map_view. highlight draws chosen nodes thicker and dims the rest, such as the answer of a --near query.
+in rerun_map. highlight draws chosen nodes thicker and dims the rest, such as the answer of a --near query.
 
-In a notebook:      plot_edges.plot(run)
-                    plot_edges.plot(run, highlight=[37, 82])
-From the shell:     uv run --no-sync python -m graph.plot_edges --source replica/room_0/00   (saves eval/edges.png)
+In a notebook:      top_down.plot(run)
+                    top_down.plot(run, highlight=[37, 82])
+From the shell:     uv run --no-sync python -m views.top_down --source replica/room_0/00   (saves eval/edges.png)
 """
 
 import json
@@ -16,16 +16,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import patches, patheffects
 
+from data.stages import Boxes, Graph, Masks, Run, load_stage
 from graph.edges import MAX_SIDE, STRUCTURE, build_edges
-from graph.node import build_nodes, colours
-from utils import map_view
-from utils.schema import Boxes, Graph, Masks, Run, load_stage
+from graph.nodes import build_nodes, colours
+from views import rerun_map
 
 MARGIN = 0.5  # metres of room shown around the objects
 
 
 def load_graph(run: Run) -> tuple[list, list]:
-    """The run's nodes (graph.node.build_nodes) and edges (graph.edges.build_edges). Needs run.py's cached stages."""
+    """The run's nodes (graph.nodes.build_nodes) and edges (graph.edges.build_edges). Needs run.py's cached stages."""
     masks = load_stage(run.stage_dir("masks"), Masks)
     vocab = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
     graph = load_stage(run.stage_dir("graph"), Graph)
@@ -50,7 +50,7 @@ def plot(run: Run, highlight: list[int] | None = None, near: bool = True) -> plt
         return 1.0 if not lit or lit & set(ids) else 0.15
 
     fig, ax = plt.subplots(figsize=(13, 10))
-    points, rgb = map_view.point_cloud(run)
+    points, rgb = rerun_map.point_cloud(run)
     corners = [c for n in shown for c in (n.box_min[:2], n.box_max[:2])] or points[:, :2]  # no nodes: the whole room
     lo, hi = np.min(corners, axis=0) - MARGIN, np.max(corners, axis=0) + MARGIN
     inside = ((points[:, :2] >= lo) & (points[:, :2] <= hi)).all(axis=1)
@@ -110,7 +110,7 @@ def plot(run: Run, highlight: list[int] | None = None, near: bool = True) -> plt
 if __name__ == "__main__":
     import argparse
 
-    from utils import footage, vocab
+    from data import footage, vocab
 
     parser = argparse.ArgumentParser(description="Save a picture of a run's graph nodes and edges as eval/edges.png.")
     parser.add_argument("--source", required=True)

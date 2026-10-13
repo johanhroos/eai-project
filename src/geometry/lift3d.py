@@ -7,16 +7,15 @@
 Replica objects never move, so "hidden" means "not visible", either out of the field of view or occluded.
 """
 
-import numpy as np
-import pycocotools.mask as mask_utils
 from dataclasses import dataclass, replace
 
+import numpy as np
+import pycocotools.mask as mask_utils
 from scipy.ndimage import binary_erosion
 
 # from utils.events import extract_events
 # from utils.geometry import backproject, mask_to_box, robust_filter
-from utils.schema import Boxes, Events, Geometry, ObjectBoxes, Run, load_stage
-
+from data.stages import Boxes, Events, Geometry, ObjectBoxes, Run, load_stage
 
 POINTS_PER_MASK = 256  # kept by compute_boxes, so that an object's box can be fit to all its views' points
 MIN_CONFIDENCE = 2.5  # median VGGT-Omega depth confidence under which a mask's depth is not trusted (reliable)
@@ -28,7 +27,7 @@ def geometry_source(run: Run):
     "gt" reads Replica's depth and poses. "vggt" reads the vggt stage (models/vggt.py): the model's depth, upsampled
     to the image size, and its cameras, both in metres with z up through the stage's Sim(3). It runs on any source.
     """
-    from utils import footage, replica
+    from data import footage, replica
 
     if run.pose_source == "gt":
         scene, seq = replica.parse_source(run.source)
@@ -55,7 +54,7 @@ def confidence_source(run: Run):
 
     VGGT-Omega's confidence is 1 + exp(x): at least 1, and higher is better. Replica's GT depth has none.
     """
-    from utils import footage
+    from data import footage
 
     if run.pose_source != "vggt":
         return None
@@ -116,7 +115,7 @@ def rle_area(rles: list[dict], chunk=255) -> np.ndarray:
 
 def visibility_pixels(run: Run):
     """GT visibility: (frames (F,), pixels (F, n_ids)) where pixels[f, id] is the object's pixel count."""
-    from utils import replica
+    from data import replica
 
     masks, _ = replica.gt_masks(run)
     frames = np.array(replica.frame_numbers(run.stride))
@@ -139,7 +138,7 @@ def compute_events(run: Run) -> Events:
 
 def compute_gt_boxes(run: Run, sample_per_frame=2000, seed=0) -> ObjectBoxes:
     """Fuse each object's GT points over all frames and take a robust box, always from GT depth and poses."""
-    from utils import replica
+    from data import replica
 
     scene, seq = replica.parse_source(run.source)
     get = geometry_source(replace(run, pose_source="gt"))  # the stage is shared by every pose_source
