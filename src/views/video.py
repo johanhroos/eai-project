@@ -23,10 +23,10 @@ from PIL import Image, ImageDraw, ImageFont
 from scipy.ndimage import binary_erosion
 from torchcodec.encoders import VideoEncoder
 
-from data import footage, replica, vocab
-from data.stages import Boxes, Graph, Masks, Run, load_stage, rle_area
+from data import cli, footage, replica
+from data.stages import Masks, Run, load_stage, mask_vocab, rle_area
 from evaluation import ground_truth
-from graph.nodes import build_nodes
+from graph.nodes import colours, load_nodes, palette
 
 TITLES = {"tracks": "SAM tracks", "graph": "graph nodes", "gt": "ground truth"}
 METRICS = {"tracks": "tracks, no graph", "graph": "graph"}  # names in eval/metrics.json
@@ -35,13 +35,7 @@ OUTLINE = 2  # mask outline width in pixels
 HEADER = 28  # pixels above each panel for its title
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument(
-    "--source", nargs="+", default=[f"replica/{scene}/00" for scene in replica.SCENES], help="as for run.py"
-)
-parser.add_argument("--stride", type=int, default=20)
-parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
-parser.add_argument("--pose-source", choices=["gt", "vggt"], help="as for run.py")
-parser.add_argument("--vocab", help="as for run.py")
+cli.add_run_arguments(parser, source=cli.REPLICA)
 parser.add_argument("--panels", nargs="+", default=["tracks", "graph"], choices=list(TITLES))
 parser.add_argument("--width", type=int, default=800, help="width of one panel in pixels")
 parser.add_argument("--fps", type=float, default=4)
@@ -49,40 +43,31 @@ parser.add_argument("--show-ignored", action="store_true", help="also draw what 
 args = parser.parse_args()
 
 
-def palette(n: int, seed: int) -> np.ndarray:
-    """(n, 3) bright random colours, light enough for black text."""
-    return np.random.default_rng(seed).uniform(90, 255, (n, 3)).astype(np.uint8)
-
-
 def panel_sources(run: Run) -> dict[str, tuple[Masks, np.ndarray, dict, dict]]:
     """Per panel: the masks, an ID per mask (-1 to leave it out), and a label and colour per ID."""
     hidden = set() if args.show_ignored else replica.IGNORE_CLASSES
-    masks = load_stage(run.stage_dir("masks"), Masks)
-    vocab = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
-    track_colour = palette(int(masks.sam_id.max()) + 1, seed=0)
+    masks, graph, nodes = load_nodes(run)
+    vocab = mask_vocab(run)
+    track_colour, node_colour = colours(masks, graph.node)
     out = {}
     if "tracks" in args.panels:
         labels = {int(t): vocab[p] for t, p in zip(masks.sam_id.tolist(), masks.prompt.tolist(), strict=True)}
         out["tracks"] = masks, masks.sam_id, labels, {t: track_colour[t] for t in labels}
     if "graph" in args.panels:
-        graph = load_stage(run.stage_dir("graph"), Graph)
-        boxes = load_stage(run.stage_dir("boxes"), Boxes)
-        nodes = build_nodes(masks, boxes, graph, vocab)
-        colours = {n.id: track_colour[np.bincount(masks.sam_id[n.rows]).argmax()] for n in nodes}
-        out["graph"] = masks, graph.node, {n.id: n.label for n in nodes}, colours
+        out["graph"] = masks, graph.node, {n.id: n.label for n in nodes}, node_colour
     if "gt" in args.panels:
         gt = load_stage(replace(run, mask_source="gt", vocab="").stage_dir("masks"), Masks)
         objects = replica.load_objects(replica.parse_source(run.source)[0])
         ids = np.where(rle_area(gt.rle) >= ground_truth.MIN_PIXELS, gt.sam_id, -1)
         colour = palette(max(objects) + 1, seed=1)
         out["gt"] = gt, ids, {o: objects[o].class_name for o in objects}, {o: colour[o] for o in objects}
-    for name, (m, ids, labels, colours) in out.items():
+    for name, (m, ids, labels, colour_of) in out.items():
         shown = np.array([i >= 0 and labels[i] not in hidden for i in ids.tolist()], bool)
-        out[name] = m, np.where(shown, ids, -1), labels, colours
+        out[name] = m, np.where(shown, ids, -1), labels, colour_of
     return {name: out[name] for name in args.panels}
 
 
-def draw(rgb: np.ndarray, masks: Masks, ids: np.ndarray, labels: dict, colours: dict, frame: int, title: str, font):
+def draw(rgb: np.ndarray, masks: Masks, ids: np.ndarray, labels: dict, colour_of: dict, frame: int, title: str, font):
     """One panel: rgb with a filled and outlined mask and a "label #ID" per ID in the frame, under a title strip.
 
     A label sits on the mask pixel nearest the mask's centroid, moved inside the panel when it would stick out.
@@ -101,8 +86,8 @@ def draw(rgb: np.ndarray, masks: Masks, ids: np.ndarray, labels: dict, colours: 
         m = np.asarray(Image.fromarray(mask_utils.decode(rle) * 255).resize(size, Image.Resampling.NEAREST)) > 0
         if not m.any():
             continue
-        image[m] = (1 - ALPHA) * image[m] + ALPHA * colours[i]
-        image[m & ~binary_erosion(m, iterations=OUTLINE, border_value=1)] = colours[i]  # none on the frame edge
+        image[m] = (1 - ALPHA) * image[m] + ALPHA * colour_of[i]
+        image[m & ~binary_erosion(m, iterations=OUTLINE, border_value=1)] = colour_of[i]  # none on the frame edge
         ys, xs = np.nonzero(m)
         k = np.argmin((ys - ys.mean()) ** 2 + (xs - xs.mean()) ** 2)
         anchors.append((int(xs[k]), int(ys[k]) + HEADER, i))
@@ -117,19 +102,15 @@ def draw(rgb: np.ndarray, masks: Masks, ids: np.ndarray, labels: dict, colours: 
         x += max(0, 2 - left) - max(0, right + 2 - panel.width)
         y += max(0, HEADER + 1 - top) - max(0, bottom + 1 - panel.height)
         left, top, right, bottom = d.textbbox((x, y), text, font=font, anchor="mm")
-        d.rectangle([left - 2, top - 1, right + 2, bottom + 1], fill=tuple(colours[i].tolist()))
+        d.rectangle([left - 2, top - 1, right + 2, bottom + 1], fill=tuple(colour_of[i].tolist()))
         d.text((x, y), text, font=font, fill="black", anchor="mm")
     return np.asarray(panel)
 
 
 font = ImageFont.load_default(size=13)
-for source in args.source:
-    try:
-        run = footage.make_run(source, args.stride, args.mask_source, args.pose_source, vocab.tag(args.vocab))
-    except ValueError as e:
-        parser.error(str(e))
+for run in cli.runs(parser, args):
     if not footage.is_replica(run) and "gt" in args.panels:
-        raise SystemExit(f"{source} has no ground truth to show: leave gt out of --panels")
+        raise SystemExit(f"{run.source} has no ground truth to show: leave gt out of --panels")
     sources = panel_sources(run)
     metrics_path = run.stage_dir("eval") / "metrics.json"
     metrics = json.loads(metrics_path.read_text()) if metrics_path.exists() else {}

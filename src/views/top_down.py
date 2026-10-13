@@ -10,35 +10,23 @@ In a notebook:      top_down.plot(run)
 From the shell:     uv run --no-sync python -m views.top_down --source replica/room_0/00   (saves eval/edges.png)
 """
 
-import json
-
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import patches, patheffects
 
-from data.stages import Boxes, Graph, Masks, Run, load_stage
+from data.stages import Run
 from graph.edges import MAX_SIDE, STRUCTURE, build_edges
-from graph.nodes import build_nodes, colours
+from graph.nodes import colours, load_nodes
 from views import rerun_map
 
 MARGIN = 0.5  # metres of room shown around the objects
 
 
-def load_graph(run: Run) -> tuple[list, list]:
-    """The run's nodes (graph.nodes.build_nodes) and edges (graph.edges.build_edges). Needs run.py's cached stages."""
-    masks = load_stage(run.stage_dir("masks"), Masks)
-    vocab = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
-    graph = load_stage(run.stage_dir("graph"), Graph)
-    boxes = load_stage(run.stage_dir("boxes"), Boxes)
-    nodes = build_nodes(masks, boxes, graph, vocab)
-    return nodes, build_edges(nodes)
-
-
 def plot(run: Run, highlight: list[int] | None = None, near: bool = True) -> plt.Figure:
     """The view from above of the run's nodes and edges (see the module docstring). near=False leaves out "near"."""
-    masks = load_stage(run.stage_dir("masks"), Masks)
-    nodes, edges = load_graph(run)
-    _, node_colour = colours(masks, load_stage(run.stage_dir("graph"), Graph).node)
+    masks, graph, nodes = load_nodes(run)
+    edges = build_edges(nodes)
+    _, node_colour = colours(masks, graph.node)
     shown = [
         n
         for n in nodes
@@ -110,21 +98,14 @@ def plot(run: Run, highlight: list[int] | None = None, near: bool = True) -> plt
 if __name__ == "__main__":
     import argparse
 
-    from data import footage, vocab
+    from data import cli
 
     parser = argparse.ArgumentParser(description="Save a picture of a run's graph nodes and edges as eval/edges.png.")
-    parser.add_argument("--source", required=True)
-    parser.add_argument("--stride", type=int, default=20)
-    parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
-    parser.add_argument("--pose-source", choices=["gt", "vggt"], help="as for run.py")
-    parser.add_argument("--vocab", help="as for run.py")
+    cli.add_run_arguments(parser, source=None)
     parser.add_argument("--highlight", type=int, nargs="*", help="node IDs to draw thicker")
     parser.add_argument("--no-near", action="store_true", help="leave out the 'near' edges")
     args = parser.parse_args()
-    try:
-        run = footage.make_run(args.source, args.stride, args.mask_source, args.pose_source, vocab.tag(args.vocab))
-    except ValueError as e:
-        parser.error(str(e))
+    run = cli.runs(parser, args)[0]
     plt.switch_backend("Agg")  # no display here
     out = run.stage_dir("eval") / "edges.png"
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -55,21 +55,16 @@ def rank(text_emb: np.ndarray, object_emb: np.ndarray) -> tuple[np.ndarray, np.n
 
 if __name__ == "__main__":
     import argparse
-    import json
 
-    from data import footage, vocab
-    from data.stages import Boxes, Graph, load_stage
+    from data import cli
+    from data.stages import load_stage
     from graph import edges as graph_edges
-    from graph.nodes import build_nodes
+    from graph.nodes import load_nodes
     from models import siglip
 
     parser = argparse.ArgumentParser(description="Print the graph nodes that best match a text.")
     parser.add_argument("text", nargs="*", help="what to look for, such as: striped pillow")
-    parser.add_argument("--source", default="replica/room_0/00")
-    parser.add_argument("--stride", type=int, default=20)
-    parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
-    parser.add_argument("--pose-source", choices=["gt", "vggt"], help="as for run.py")
-    parser.add_argument("--vocab", help="as for run.py")
+    cli.add_run_arguments(parser)
     parser.add_argument("--top", type=int, default=5)
     parser.add_argument(
         "--near",
@@ -81,14 +76,8 @@ if __name__ == "__main__":
     if not args.text and args.position is None:
         parser.error("give a text to look for, or --position x y z")
 
-    try:
-        run = footage.make_run(args.source, args.stride, args.mask_source, args.pose_source, vocab.tag(args.vocab))
-    except ValueError as e:
-        parser.error(str(e))
-    masks = load_stage(run.stage_dir("masks"), Masks)
-    names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
-    graph = load_stage(run.stage_dir("graph"), Graph)
-    nodes = build_nodes(masks, load_stage(run.stage_dir("boxes"), Boxes), graph, names)
+    run = cli.runs(parser, args)[0]
+    masks, graph, nodes = load_nodes(run)
     edges = graph_edges.build_edges(nodes)
     # build_nodes lists nodes in ID order, and IDs run 0, 1, ..., so an ID indexes nodes
 

@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pycocotools.mask as mask_utils
 
-from data.stages import Boxes, Features, Graph, Masks, Run, TextAligned, load_stage, save_stage
+from data.stages import Boxes, Features, Graph, Masks, Run, TextAligned, load_stage, mask_vocab, save_stage
 from geometry.mask_boxes import Box3D, reliable
 from graph import multiview, refine
 from graph.memory import AssociationConfig, ObjectMemory, Observation, normalized
@@ -229,7 +229,7 @@ def cached_observations(run: Run):
     if older:
         raise ValueError(f"Cached stages older than masks: {', '.join(older)}. Refresh them with run.py first.")
     data = [load_stage(run.stage_dir(stage), cls) for stage, cls in required]
-    vocab = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
+    vocab = mask_vocab(run)
     return (*data, vocab)
 
 
