@@ -115,12 +115,10 @@ def object_ids(run: Run, variant: str, masks: Masks) -> np.ndarray:
         return masks.sam_id.astype(np.int32)
     if variant == "graph":
         return load_stage(run.stage_dir("graph"), Graph).node
-    if variant == "memory":  # replayed with the settings the graph stage was built with
+    if variant == "memory":  # the object memory alone, before graph/refine.py
         from graph import build
-        from graph.memory import AssociationConfig
 
-        graph_metadata = json.loads((run.stage_dir("graph") / "metadata.json").read_text())
-        return build.rebuild(run, AssociationConfig(**graph_metadata["config"]), save=False).graph.node
+        return build.rebuild(run, save=False).graph.node
     raise ValueError(f"unknown variant {variant!r}")
 
 

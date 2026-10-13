@@ -5,7 +5,7 @@ data/phone/<name>.<ext>) have no ground truth: they use VGGT-Omega's poses and s
 
 The graph stage (graph/build.py) takes the masks one frame at a time. A mask joins the object its SAM track
 belongs to; new tracks, and tracks that jumped to another object, join the object in memory they match by DINO
-appearance and location (configs/association.json), or make a new one. At the end, nodes whose points form clusters
+appearance and location (graph/memory.py), or make a new one. At the end, nodes whose points form clusters
 apart are split, each is labelled from all its views, masks and parts of one object are merged, and only the objects
 whose box can be trusted are kept (graph/refine.py); each object's box is then drawn from the points its views agree
 on (graph/multiview.py).
@@ -42,7 +42,6 @@ from data.stages import (
 from evaluation import ground_truth, metrics
 from geometry import mask_boxes
 from graph import build
-from graph.memory import AssociationConfig
 from models import dino, sam, siglip, vggt
 
 STAGES = ["frames", "masks", "features", "siglip", "vggt", "boxes", "graph", "events", "gt_boxes"]
@@ -52,11 +51,6 @@ UPSTREAM["graph"] = ["masks", "features", "siglip", "boxes"]
 
 parser = argparse.ArgumentParser(description=__doc__)
 cli.add_run_arguments(parser, source=cli.REPLICA)
-parser.add_argument(
-    "--association-config",
-    default=str(build.DEFAULT_CONFIG),
-    help="JSON of graph.memory.AssociationConfig, the graph's matching parameters",
-)
 parser.add_argument(
     "--graph-only",
     action="store_true",
@@ -70,10 +64,6 @@ parser.add_argument(
     help="recompute these stages even if they are cached, or every stage when none is named",
 )
 args = parser.parse_args()
-try:
-    association_config = AssociationConfig.from_json(args.association_config)
-except (ValueError, TypeError, OSError) as e:
-    parser.error(f"invalid association configuration: {e}")
 runs = cli.runs(parser, args)
 
 
@@ -140,7 +130,7 @@ results = {}
 for run in runs:
     source = run.source
     if args.graph_only:
-        build.rebuild(run, association_config)
+        build.rebuild(run)
         node = load_stage(run.stage_dir("graph"), Graph).node
         print(f"{source}: saved {len(np.unique(node[node >= 0]))} objects to {run.stage_dir('graph')}")
         continue
@@ -189,12 +179,10 @@ for run in runs:
         print(f"Saved boxes to {run.stage_dir('boxes')}")
     boxes = load_stage(run.stage_dir("boxes"), Boxes)
 
-    if stale(run, "graph", build.metadata(association_config)):
+    if stale(run, "graph", build.metadata()):
         names = mask_vocab(run)
         embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
-        built = build.replay(
-            masks, boxes, features, embeddings, names, association_config, frames=footage.frame_numbers(run)
-        )
+        built = build.replay(masks, boxes, features, embeddings, names, frames=footage.frame_numbers(run))
         finish = partial(build.finish, run, masks, boxes, features, embeddings, names)
         build.save_result(run.stage_dir("graph"), built, finish)
         check_aligned(run, "graph")
