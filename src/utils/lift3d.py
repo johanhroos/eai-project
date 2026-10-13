@@ -11,7 +11,6 @@ import numpy as np
 import pycocotools.mask as mask_utils
 from dataclasses import dataclass, replace
 
-import numpy as np
 from scipy.ndimage import binary_erosion
 
 # from utils.events import extract_events
@@ -233,13 +232,6 @@ def mask_to_box(depth, K, c2w, mask, conf=None, erode_px=2, min_points=50, mad_s
     if len(pts) < min_points:
         return None
     return Box3D(pts.min(0), pts.max(0), len(pts), pts, median_conf)
-
-
-def box_iou_3d(a: Box3D, b: Box3D) -> float:
-    lo, hi = np.maximum(a.min, b.min), np.minimum(a.max, b.max)
-    inter = float(np.prod(np.maximum(hi - lo, 0)))
-    union = a.volume + b.volume - inter
-    return inter / union if union > 0 else 0.0
 
 
 def box_containment(a: Box3D, b: Box3D) -> float:

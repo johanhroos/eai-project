@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from transformers import AutoImageProcessor, AutoModel
 
 from models.sam import mask_boxes
-from utils import footage, replica
+from utils import footage
 from utils.image_crop import pad_bbox
 from utils.schema import Features, Masks, Run
 
@@ -101,16 +101,3 @@ def features(run: Run, masks: Masks, encoder: DINOEncoder) -> Features:
             embeddings = encoder.encode_masks(image, stack[i : i + BATCH], boxes[rows[i : i + BATCH]])
             dino[rows[i : i + BATCH]] = embeddings.cpu().numpy().astype(np.float16)
     return Features(dino=dino)
-
-
-if __name__ == "__main__":
-    dino = DINOEncoder(MODEL_ID)
-
-    print(next(dino.model.parameters()).device)
-
-    # load image
-    rgb, depth, ids = replica.load_frame("room_0", "00", 0)
-    print(rgb.shape)
-
-    embedding = dino.encode(rgb.copy())
-    print(embedding.shape)
