@@ -14,7 +14,7 @@ import numpy as np
 import pycocotools.mask as mask_utils
 
 from data.stages import Boxes, Features, Graph, Masks, Run, TextAligned, load_stage, save_stage
-from geometry.lift3d import Box3D, reliable
+from geometry.mask_boxes import Box3D, reliable
 from graph import multiview, refine
 from graph.memory import AssociationConfig, ObjectMemory, Observation, normalized
 from graph.nodes import fit_box, mask_points, most_confident
@@ -50,7 +50,7 @@ def observation_groups(masks: Masks, rows: np.ndarray, threshold: float) -> list
 
 
 def observation(masks: Masks, boxes: Boxes, features: Features, siglip: TextAligned, vocab, trusted, group):
-    """The Observation of a duplicate group's masks (rows). trusted is lift3d.reliable(boxes).
+    """The Observation of a duplicate group's masks (rows). trusted is mask_boxes.reliable(boxes).
 
     Its box is around its reliable masks' points, else that of its mask with the most confident depth.
     """

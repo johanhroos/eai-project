@@ -78,9 +78,9 @@ as well: request it like SAM 3 and use the same `hf auth login`.
 | `features` | `models/dino.py` | DINOv3 embedding per mask: patch tokens of the mask's padded box crop, averaged over the mask |
 | `siglip` | `models/siglip.py` | SigLIP 2 embedding per mask, comparable with text: the mean of a square crop around the mask and the same crop greyed outside it |
 | `vggt` | `models/vggt.py` | Only with `--pose-source vggt`: VGGT-Omega depth and cameras for every frame, in metres with z up |
-| `boxes` | `geometry/lift3d.py` | World-frame 3D box per mask, 256 of its points and the median confidence of its depth (VGGT-Omega's; NaN for Replica's), from depth and pose. `lift3d.reliable` says which masks' depth to trust |
+| `boxes` | `geometry/mask_boxes.py` | World-frame 3D box per mask, 256 of its points and the median confidence of its depth (VGGT-Omega's; NaN for Replica's), from depth and pose. `mask_boxes.reliable` says which masks' depth to trust |
 | `graph` | `graph/memory.py`, `graph/build.py` | Object node per mask, from an object memory that takes the masks one frame at a time: a mask joins its SAM track's node, and DINO appearance and location cut tracks that jump and match new ones. Then the nodes are split, labelled and merged as a whole, and only those whose box can be trusted are kept (`graph/refine.py`; the masks of dropped ones get node -1), and each node's box is drawn from every view of it (`graph/multiview.py`). Also the memory itself, the match scores, the merges, the node count over time and what refine did (`refine.json`). `graph/nodes.py` gives each node's label |
-| `events`, `gt_boxes` | `geometry/lift3d.py` | Ground truth for the evaluation: when objects leave the view and come back, and one 3D box per object |
+| `events`, `gt_boxes` | `geometry/mask_boxes.py` | Ground truth for the evaluation: when objects leave the view and come back, and one 3D box per object |
 
 The graph stage (`graph/build.py`, `graph/memory.py`) builds an object memory one frame at a time. SAM 3's
 tracker is mostly right about which masks are one object, so its tracks are the starting point, and DINO appearance
@@ -89,8 +89,8 @@ and 3D location check them:
 1. Masks of one frame that overlap strongly (mask IoU >= 0.6) are one observation: one object found by several prompts.
    Its SAM IDs all join one node, the older one where they already had two. Those two nodes don't merge there: that put
    three monitors up to 2.7 m apart into one node on IMG_0649.
-2. Only **reliable** masks are evidence (`lift3d.reliable`): enough depth points, and a median VGGT-Omega depth
-   confidence of at least 2.5 (`lift3d.MIN_CONFIDENCE`). Far views fail it: their depth smears along the camera ray,
+2. Only **reliable** masks are evidence (`mask_boxes.reliable`): enough depth points, and a median VGGT-Omega depth
+   confidence of at least 2.5 (`mask_boxes.MIN_CONFIDENCE`). Far views fail it: their depth smears along the camera ray,
    so a 1 m umbrella seen from 5 m got a 2 m box. An unreliable mask joins its track's node and does nothing else.
 3. A mask whose SAM ID has a node **joins that node**, unless the track was **cut**: its box is more than 0.3 m from
    the box of the track's last reliable mask, or its DINO cosine to that mask is under 0.5 and the two boxes don't
@@ -376,7 +376,7 @@ uv run --no-sync python -m views.video --source replica/room_0/00 --panels track
 `configs/association.json` holds every matching parameter. Weights are normalised over the enabled cues
 (`enable_dino`, `enable_geometry`), and a missing cue scores zero without redistributing its weight. Geometry is
 `geometry_inside_weight * inside + (1 - geometry_inside_weight) * exp(-centre distance / center_distance_scale)`, where
-inside is the share of the smaller box inside the larger (`lift3d.box_containment`). Not IoU: a view of part of an
+inside is the share of the smaller box inside the larger (`mask_boxes.box_containment`). Not IoU: a view of part of an
 object lies inside the object's box, which has grown to all its views, so IoU would score it near 0 and split the
 object into many nodes. A match needs a score strictly above the threshold; in each frame the strongest pairs
 are assigned first, one observation per object. `require_same_label` adds a same-label rule, off by default since

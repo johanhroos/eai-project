@@ -9,9 +9,8 @@ import torch.nn.functional as F
 from transformers import AutoModel, AutoProcessor
 
 from data import footage
-from data.stages import Masks, Run, TextAligned
+from data.stages import Masks, Run, TextAligned, bounding_boxes
 from models.crops import pad_bbox, square_bbox
-from models.sam import mask_boxes
 
 MODEL_ID = "google/siglip2-so400m-patch16-384"
 TEMPLATE = "This is a photo of {}."  # the prompt format of the SigLIP 2 model card
@@ -29,7 +28,7 @@ class SiglipEncoder:
     def encode_masks(self, image: np.ndarray, masks: np.ndarray, boxes: np.ndarray, padding=0.1) -> torch.Tensor:
         """One L2-normalized embedding per mask, (k, D) float32 on the device. An empty mask gets a zero vector.
 
-        image is RGB (H, W, 3) uint8, masks (k, H, W) bool and boxes their (k, 4) x0, y0, x1, y1 from mask_boxes.
+        image is RGB (H, W, 3) uint8, masks (k, H, W) bool and boxes their (k, 4) x0, y0, x1, y1 from bounding_boxes.
         Each box is padded and grown to a square, so the processor's square resize doesn't squash the object. The crop
         is encoded twice, as it is and with grey outside the mask, and the two are averaged: the first shows the object
         in context, the second which object is meant. On Replica GT masks, the average names the class of 70% of the
@@ -66,7 +65,7 @@ def load_encoder() -> SiglipEncoder:
 
 def features(run: Run, masks: Masks, encoder: SiglipEncoder) -> TextAligned:
     """The siglip stage: a SigLIP embedding for every mask of the run, row-aligned with masks."""
-    boxes = mask_boxes(masks.rle)
+    boxes = bounding_boxes(masks.rle)
     siglip = None
     for frame in np.unique(masks.frame):
         rows = np.flatnonzero(masks.frame == frame)

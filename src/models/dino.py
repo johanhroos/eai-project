@@ -7,9 +7,8 @@ import torch.nn.functional as F
 from transformers import AutoImageProcessor, AutoModel
 
 from data import footage
-from data.stages import Features, Masks, Run
+from data.stages import Features, Masks, Run, bounding_boxes
 from models.crops import pad_bbox
-from models.sam import mask_boxes
 
 # Usage:
 # 1. Create a DINOEncoder with the desired DINO model.
@@ -60,7 +59,7 @@ class DINOEncoder:
     def encode_masks(self, image: np.ndarray, masks: np.ndarray, boxes: np.ndarray, padding=0.1) -> torch.Tensor:
         """One L2-normalized embedding per mask, (k, D) float32 on the device.
 
-        image is RGB (H, W, 3) uint8, masks (k, H, W) bool and boxes their (k, 4) x0, y0, x1, y1 from mask_boxes.
+        image is RGB (H, W, 3) uint8, masks (k, H, W) bool and boxes their (k, 4) x0, y0, x1, y1 from bounding_boxes.
         Each mask's padded box is cropped and encoded, and the patch tokens are averaged with the share of each patch
         the mask covers as weight, so the background in the crop counts little. An empty mask gets a zero vector.
         """
@@ -91,7 +90,7 @@ def load_encoder() -> DINOEncoder:
 
 def features(run: Run, masks: Masks, encoder: DINOEncoder) -> Features:
     """The features stage: a DINO embedding for every mask of the run, row-aligned with masks."""
-    boxes = mask_boxes(masks.rle)
+    boxes = bounding_boxes(masks.rle)
     dino = np.zeros((len(masks.frame), encoder.model.config.hidden_size), np.float16)
     for frame in np.unique(masks.frame):
         rows = np.flatnonzero(masks.frame == frame)

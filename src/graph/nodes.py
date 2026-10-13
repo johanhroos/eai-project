@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from data.stages import Boxes, Graph, Masks
-from geometry.lift3d import reliable
+from geometry.mask_boxes import reliable
 
 
 @dataclass
@@ -51,7 +51,7 @@ def most_confident(boxes: Boxes, rows: np.ndarray) -> int | None:
 
 
 def node_box(boxes: Boxes, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """An object's box from its masks: around the pooled points of the reliable ones (lift3d.reliable).
+    """An object's box from its masks: around the pooled points of the reliable ones (mask_boxes.reliable).
 
     The views each see part of the object, so their pooled points cover the space it fills, also behind occluders.
     Pooling rather than the union of the masks' boxes keeps one view's stray depth from setting the box. Without a

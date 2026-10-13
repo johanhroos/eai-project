@@ -2,7 +2,7 @@
 
   tracks  SAM tracks of the masks stage: label = prompt, ID = SAM track
   graph   nodes of the graph stage: a node's masks in a frame are drawn as one, their union, label = node label
-  gt      Replica ground truth: label = class, ID = Replica object, without masks under lift3d.MIN_PIXELS
+  gt      Replica ground truth: label = class, ID = Replica object, without masks under ground_truth.MIN_PIXELS
 
 Like the evaluation, every panel leaves out walls, floors, ceilings and unlabelled objects (replica.IGNORE_CLASSES)
 unless --show-ignored is given.
@@ -24,8 +24,8 @@ from scipy.ndimage import binary_erosion
 from torchcodec.encoders import VideoEncoder
 
 from data import footage, replica, vocab
-from data.stages import Boxes, Graph, Masks, Run, load_stage
-from geometry import lift3d
+from data.stages import Boxes, Graph, Masks, Run, load_stage, rle_area
+from evaluation import ground_truth
 from graph.nodes import build_nodes
 
 TITLES = {"tracks": "SAM tracks", "graph": "graph nodes", "gt": "ground truth"}
@@ -73,7 +73,7 @@ def panel_sources(run: Run) -> dict[str, tuple[Masks, np.ndarray, dict, dict]]:
     if "gt" in args.panels:
         gt = load_stage(replace(run, mask_source="gt", vocab="").stage_dir("masks"), Masks)
         objects = replica.load_objects(replica.parse_source(run.source)[0])
-        ids = np.where(lift3d.rle_area(gt.rle) >= lift3d.MIN_PIXELS, gt.sam_id, -1)
+        ids = np.where(rle_area(gt.rle) >= ground_truth.MIN_PIXELS, gt.sam_id, -1)
         colour = palette(max(objects) + 1, seed=1)
         out["gt"] = gt, ids, {o: objects[o].class_name for o in objects}, {o: colour[o] for o in objects}
     for name, (m, ids, labels, colours) in out.items():

@@ -29,11 +29,10 @@ from PIL import Image
 from scipy.ndimage import maximum_filter, minimum_filter
 
 from data import footage, replica
-from data.stages import Boxes, Graph, Masks, Run, load_stage
-from geometry import lift3d
+from data.stages import Boxes, Graph, Masks, Run, bounding_boxes, load_stage
+from geometry.depth import backproject, geometry_source
 from graph.edges import build_edges
 from graph.nodes import build_nodes
-from models.sam import mask_boxes
 
 FUSED_FRAMES = 40  # frames whose depth makes up the point cloud
 PIXEL_STEP = 2  # every PIXEL_STEP-th pixel in both directions
@@ -46,7 +45,7 @@ PATH_COLOURS = [(255, 80, 80), (80, 200, 255), (255, 220, 60), (120, 255, 120)] 
 def point_cloud(run: Run) -> tuple[np.ndarray, np.ndarray]:
     """(N, 3) float32 world points in metres and their (N, 3) uint8 colours, fused from FUSED_FRAMES frames."""
     frames = footage.frame_numbers(run)
-    get = lift3d.geometry_source(run)
+    get = geometry_source(run)
     points, colours = [], []
     for i in frames[np.unique(np.linspace(0, len(frames) - 1, FUSED_FRAMES).astype(int))].tolist():
         depth, K, c2w = get(i)
@@ -54,7 +53,7 @@ def point_cloud(run: Run) -> tuple[np.ndarray, np.ndarray]:
         keep = (jump < EDGE_JUMP) & (depth > 0)
         grid = np.zeros_like(keep)
         grid[::PIXEL_STEP, ::PIXEL_STEP] = True
-        pts, vu = lift3d.backproject(depth, K, c2w, keep & grid)
+        pts, vu = backproject(depth, K, c2w, keep & grid)
         points.append(pts)
         colours.append(footage.load_rgb(run, i)[vu[:, 0], vu[:, 1]])
     points, colours = np.concatenate(points), np.concatenate(colours)
@@ -130,7 +129,7 @@ def log_map(run: Run) -> None:
             )
 
     frames = footage.frame_numbers(run).tolist()
-    get = lift3d.geometry_source(run)
+    get = geometry_source(run)
     cameras = {i: get(i)[1:] for i in frames}  # (K, c2w)
     path = np.array([c2w[:3, 3] for _, c2w in cameras.values()])
     clip = footage.clip_index(run)
@@ -146,7 +145,7 @@ def log_map(run: Run) -> None:
     )
 
     shown = {n.id for n in nodes}
-    xyxy = mask_boxes(masks.rle)
+    xyxy = bounding_boxes(masks.rle)
     for i in frames:
         K, c2w = cameras[i]
         rgb = footage.load_rgb(run, i)

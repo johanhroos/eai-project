@@ -51,8 +51,9 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
-from data.stages import Boxes, Features, Masks, Run, TextAligned
-from geometry import lift3d
+from data.stages import Boxes, Features, Masks, Run, TextAligned, rle_area
+from geometry import mask_boxes
+from geometry.depth import geometry_source
 from graph import multiview
 from graph.nodes import mask_points
 
@@ -128,7 +129,7 @@ def split(
 ) -> tuple[np.ndarray, list[dict]]:
     """The node of every mask, with each node whose points form clusters apart split, and a record of each split."""
     node = node.copy()
-    trusted = lift3d.reliable(boxes)
+    trusted = mask_boxes.reliable(boxes)
     next_id = int(node.max()) + 1 if len(node) else 0
     records = []
     for n in np.unique(node[node >= 0]).tolist():
@@ -169,7 +170,7 @@ def spread(points: np.ndarray, k: int) -> np.ndarray:
 
 def node_points(boxes: Boxes, rows: np.ndarray) -> np.ndarray:
     """(k, 3) sampled points of a node's reliable masks, or of all its masks with points when none is reliable."""
-    good = rows[lift3d.reliable(boxes)[rows]]
+    good = rows[mask_boxes.reliable(boxes)[rows]]
     points = mask_points(boxes, good if len(good) else rows[boxes.n_points[rows] > 0])
     return points if len(points) else np.full((1, 3), np.inf, np.float32)
 
@@ -310,12 +311,12 @@ def quality(run: Run, masks: Masks, boxes: Boxes, node: np.ndarray) -> dict[int,
               lie inside its own mask there. The scene is static, so one object's points seen in a frame are inside
               its mask, and a node that joined masks of several objects (a far monitor and a table top SAM called a
               monitor) has the others' points outside. None when no frame sees enough of it.
-    views     its reliable masks (lift3d.reliable)
+    views     its reliable masks (mask_boxes.reliable)
     arc       degrees about the vertical that the directions from those views' cameras to the node span: a node seen
               from one direction has a depth extent no other view checked.
     """
-    trusted = lift3d.reliable(boxes)
-    get = multiview.view_source(run)
+    trusted = mask_boxes.reliable(boxes)
+    get = geometry_source(run, full_size=False)
     ids = np.unique(node[node >= 0]).tolist()
     points = {n: spread(node_points(boxes, np.flatnonzero(node == n)), SIGHTING_POINTS) for n in ids}
     covers = {n: [] for n in ids}
@@ -353,7 +354,7 @@ def sightings(
     points holds each node's points by ID. A frame sees a node when at least visible of its points are in the image
     and not hidden (as in graph/multiview.py), and a mask holds it when at least contained of those lie inside the mask.
     """
-    get = multiview.view_source(run)
+    get = geometry_source(run, full_size=False)
     ids = list(points)
     stacked = np.concatenate([points[n] for n in ids])
     owner = np.repeat(np.arange(len(ids)), [len(points[n]) for n in ids])
@@ -495,7 +496,7 @@ def consensus_merge(
 
 def camera_centres(run: Run, frames) -> dict[int, np.ndarray]:
     """The camera's position in the world (metres) in each of frames."""
-    get = multiview.view_source(run)
+    get = geometry_source(run, full_size=False)
     return {int(f): get(int(f))[2][:3, 3] for f in np.unique(frames).tolist()}
 
 
@@ -521,7 +522,7 @@ def drop(
     if not len(node):
         return node, []
     height, width = masks.rle[0]["size"]
-    area = lift3d.rle_area(masks.rle) / (height * width)
+    area = rle_area(masks.rle) / (height * width)
     distance = np.full(len(node), np.inf)
     if boxes.points is not None:
         centre = camera_centres(run, masks.frame)
