@@ -20,8 +20,6 @@ To a file the Rerun viewer opens (rerun <file>, with the same version as rerun-s
     uv run --no-sync python -m views.rerun_map --source phone/IMG_0644 --stride 1 --vocab data/vocab/IMG_0644.txt
 """
 
-import json
-
 import numpy as np
 import rerun as rr
 import rerun.blueprint as rrb
@@ -29,10 +27,10 @@ from PIL import Image
 from scipy.ndimage import maximum_filter, minimum_filter
 
 from data import footage, replica
-from data.stages import Boxes, Graph, Masks, Run, bounding_boxes, load_stage
+from data.stages import Run, bounding_boxes
 from geometry.depth import backproject, geometry_source
 from graph.edges import build_edges
-from graph.nodes import build_nodes
+from graph.nodes import colours, load_nodes
 
 FUSED_FRAMES = 40  # frames whose depth makes up the point cloud
 PIXEL_STEP = 2  # every PIXEL_STEP-th pixel in both directions
@@ -46,7 +44,7 @@ def point_cloud(run: Run) -> tuple[np.ndarray, np.ndarray]:
     """(N, 3) float32 world points in metres and their (N, 3) uint8 colours, fused from FUSED_FRAMES frames."""
     frames = footage.frame_numbers(run)
     get = geometry_source(run)
-    points, colours = [], []
+    points, rgb = [], []
     for i in frames[np.unique(np.linspace(0, len(frames) - 1, FUSED_FRAMES).astype(int))].tolist():
         depth, K, c2w = get(i)
         jump = (maximum_filter(depth, 3) - minimum_filter(depth, 3)) / np.maximum(depth, 1e-6)
@@ -55,26 +53,21 @@ def point_cloud(run: Run) -> tuple[np.ndarray, np.ndarray]:
         grid[::PIXEL_STEP, ::PIXEL_STEP] = True
         pts, vu = backproject(depth, K, c2w, keep & grid)
         points.append(pts)
-        colours.append(footage.load_rgb(run, i)[vu[:, 0], vu[:, 1]])
-    points, colours = np.concatenate(points), np.concatenate(colours)
+        rgb.append(footage.load_rgb(run, i)[vu[:, 0], vu[:, 1]])
+    points, rgb = np.concatenate(points), np.concatenate(rgb)
     voxel = np.floor(points / VOXEL).astype(np.int64)
     _, first = np.unique(voxel - voxel.min(0), axis=0, return_index=True)
-    return points[first].astype(np.float32), colours[first]
+    return points[first].astype(np.float32), rgb[first]
 
 
 def log_map(run: Run) -> None:
     """Log the run's map to the active Rerun recording (see the module docstring). Needs run.py's cached stages."""
-    masks = load_stage(run.stage_dir("masks"), Masks)
-    vocab = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
-    graph = load_stage(run.stage_dir("graph"), Graph)
-    boxes = load_stage(run.stage_dir("boxes"), Boxes)
-    nodes = build_nodes(masks, boxes, graph, vocab)
+    masks, graph, nodes = load_nodes(run)
     edges = build_edges(nodes)
     nodes = [n for n in nodes if n.label not in replica.IGNORE_CLASSES]  # walls and floors, as in the evaluation
 
     # Each object keeps the colour views/video.py gives it: that of its largest SAM track
-    track_colour = np.random.default_rng(0).uniform(90, 255, (int(masks.sam_id.max()) + 1, 3)).astype(np.uint8)
-    colour = {n.id: track_colour[np.bincount(masks.sam_id[n.rows]).argmax()] for n in nodes}
+    _, node_colour = colours(masks, graph.node)
     rr.send_blueprint(
         rrb.Blueprint(
             rrb.Horizontal(
@@ -84,12 +77,12 @@ def log_map(run: Run) -> None:
             )
         )
     )
-    infos = [rr.AnnotationInfo(id=n.id + 1, label=f"{n.label} #{n.id}", color=colour[n.id]) for n in nodes]
+    infos = [rr.AnnotationInfo(id=n.id + 1, label=f"{n.label} #{n.id}", color=node_colour[n.id]) for n in nodes]
     rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
     rr.log("world", rr.AnnotationContext(infos), static=True)
 
-    points, colours = point_cloud(run)
-    rr.log("world/points", rr.Points3D(points, colors=colours, radii=VOXEL / 2), static=True)
+    points, rgb = point_cloud(run)
+    rr.log("world/points", rr.Points3D(points, colors=rgb, radii=VOXEL / 2), static=True)
     placed = [n for n in nodes if np.isfinite(n.box_min).all()]
     rr.log(
         "world/objects",
@@ -174,19 +167,12 @@ def log_map(run: Run) -> None:
 if __name__ == "__main__":
     import argparse
 
-    from data import vocab
+    from data import cli
 
     parser = argparse.ArgumentParser(description="Save a run's map as a Rerun recording, eval/map.rrd.")
-    parser.add_argument("--source", required=True)
-    parser.add_argument("--stride", type=int, default=20)
-    parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
-    parser.add_argument("--pose-source", choices=["gt", "vggt"], help="as for run.py")
-    parser.add_argument("--vocab", help="as for run.py")
+    cli.add_run_arguments(parser, source=None)
     args = parser.parse_args()
-    try:
-        run = footage.make_run(args.source, args.stride, args.mask_source, args.pose_source, vocab.tag(args.vocab))
-    except ValueError as e:
-        parser.error(str(e))
+    run = cli.runs(parser, args)[0]
     out = run.stage_dir("eval") / "map.rrd"
     out.parent.mkdir(parents=True, exist_ok=True)
     rr.init("map_" + run.source.replace("/", "_"))

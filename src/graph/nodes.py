@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from data.stages import Boxes, Graph, Masks
+from data.stages import Boxes, Graph, Masks, Run, load_stage, mask_vocab
 from geometry.mask_boxes import reliable
 
 
@@ -99,10 +99,19 @@ def build_nodes(masks: Masks, boxes: Boxes, graph: Graph, vocab: list[str]) -> l
     return nodes
 
 
-def colours(masks: Masks, node: np.ndarray) -> tuple[np.ndarray, dict[int, np.ndarray]]:
-    """The colours views/video.py, rerun_map and views/top_down.py share.
+def load_nodes(run: Run) -> tuple[Masks, Graph, list[Node]]:
+    """A run's masks, its graph stage and the graph's nodes (build_nodes), from run.py's cached stages."""
+    masks = load_stage(run.stage_dir("masks"), Masks)
+    graph = load_stage(run.stage_dir("graph"), Graph)
+    return masks, graph, build_nodes(masks, load_stage(run.stage_dir("boxes"), Boxes), graph, mask_vocab(run))
 
-    Returns (n_tracks, 3) uint8 colours by SAM ID, and by node ID the colour of the node's largest track.
-    """
-    track = np.random.default_rng(0).uniform(90, 255, (int(masks.sam_id.max()) + 1, 3)).astype(np.uint8)
+
+def palette(n: int, seed: int = 0) -> np.ndarray:
+    """(n, 3) uint8 bright random colours, light enough for black text."""
+    return np.random.default_rng(seed).uniform(90, 255, (n, 3)).astype(np.uint8)
+
+
+def colours(masks: Masks, node: np.ndarray) -> tuple[np.ndarray, dict[int, np.ndarray]]:
+    """The colours of every view: (n_tracks, 3) uint8 by SAM ID, and by node ID the colour of its largest track."""
+    track = palette(int(masks.sam_id.max()) + 1)
     return track, {int(n): track[np.bincount(masks.sam_id[node == n]).argmax()] for n in np.unique(node[node >= 0])}

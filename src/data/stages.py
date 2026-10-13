@@ -51,6 +51,11 @@ class Run:
         return (self.stage_dir(stage) / "metadata.json").exists()
 
 
+def mask_vocab(run: Run) -> list[str]:
+    """The prompts of the run's masks stage, which Masks.prompt indexes."""
+    return json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
+
+
 @dataclass
 class Features:
     """Appearance embedding of every mask: row i belongs to mask i of the masks stage."""

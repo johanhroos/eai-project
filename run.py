@@ -24,7 +24,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import numpy as np
 import torch
 
-from data import footage, replica, vocab
+from data import cli, footage, replica, vocab
 from data.stages import (
     Boxes,
     Events,
@@ -36,6 +36,7 @@ from data.stages import (
     TextAligned,
     check_aligned,
     load_stage,
+    mask_vocab,
     save_stage,
 )
 from evaluation import ground_truth, metrics
@@ -50,14 +51,7 @@ UPSTREAM = {"masks": ["frames"], "features": ["masks"], "siglip": ["masks"], "bo
 UPSTREAM["graph"] = ["masks", "features", "siglip", "boxes"]
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument(
-    "--source",
-    nargs="+",
-    default=[f"replica/{scene}/00" for scene in replica.SCENES],
-    help="runs to compute, such as replica/room_0/00 or phone/kitchen (default: every Replica scene's sequence 00)",
-)
-parser.add_argument("--stride", type=int, default=20)
-parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
+cli.add_run_arguments(parser, source=cli.REPLICA)
 parser.add_argument(
     "--association-config",
     default=str(build.DEFAULT_CONFIG),
@@ -70,14 +64,6 @@ parser.add_argument(
 )
 parser.add_argument("--skip-text-eval", action="store_true", help="score identities without loading the text encoder")
 parser.add_argument(
-    "--pose-source", choices=["gt", "vggt"], help="default: Replica's on Replica, VGGT-Omega's on phone video"
-)
-parser.add_argument(
-    "--vocab",
-    help="SAM prompts: a name in vocab.NAMED such as indoor, or a text file with one prompt per line. Default: the "
-    "scene's GT classes on Replica, vocab.INDOOR on phone video. Its outputs go to their own directories",
-)
-parser.add_argument(
     "--overwrite",
     nargs="*",
     choices=STAGES,
@@ -88,14 +74,7 @@ try:
     association_config = AssociationConfig.from_json(args.association_config)
 except (ValueError, TypeError, OSError) as e:
     parser.error(f"invalid association configuration: {e}")
-if args.stride < 1:
-    parser.error("stride must be positive")
-try:
-    runs = [
-        footage.make_run(s, args.stride, args.mask_source, args.pose_source, vocab.tag(args.vocab)) for s in args.source
-    ]
-except ValueError as e:
-    parser.error(str(e))
+runs = cli.runs(parser, args)
 
 
 def stale(run: Run, stage: str, params: dict | None = None) -> bool:
@@ -211,7 +190,7 @@ for run in runs:
     boxes = load_stage(run.stage_dir("boxes"), Boxes)
 
     if stale(run, "graph", build.metadata(association_config)):
-        names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
+        names = mask_vocab(run)
         embeddings = load_stage(run.stage_dir("siglip"), TextAligned)
         built = build.replay(
             masks, boxes, features, embeddings, names, association_config, frames=footage.frame_numbers(run)
@@ -261,7 +240,7 @@ for run in runs:
         for name, ids in predictions.items():
             scores = metrics.queries(masks, ids, gt, embeddings, targets, text)
             results[source][name].update({f"{level}_{k}": v for k, v in scores.items()})
-    names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
+    names = mask_vocab(run)
     gt_boxes = load_stage(run.stage_dir("gt_boxes"), ObjectBoxes)
     for name, graph in graphs.items():
         results[source][name].update(metrics.nearest_objects(masks, graph, gt, boxes, names, gt_boxes, objects))

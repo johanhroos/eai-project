@@ -125,33 +125,16 @@ def nearest_boxes(lo: np.ndarray, hi: np.ndarray, anchor: int, candidates: list[
 
 if __name__ == "__main__":
     import argparse
-    import json
     from collections import Counter
 
-    from data import footage, vocab
-    from data.stages import Boxes, Graph, Masks, load_stage
-    from graph.nodes import build_nodes
+    from data import cli
+    from graph.nodes import load_nodes
 
     parser = argparse.ArgumentParser(description="Print the edges of a run's graph.")
-    parser.add_argument("--source", default="replica/room_0/00")
-    parser.add_argument("--stride", type=int, default=20)
-    parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
-    parser.add_argument("--pose-source", choices=["gt", "vggt"], help="as for run.py")
-    parser.add_argument("--vocab", help="as for run.py")
+    cli.add_run_arguments(parser)
     args = parser.parse_args()
-
-    try:
-        run = footage.make_run(args.source, args.stride, args.mask_source, args.pose_source, vocab.tag(args.vocab))
-    except ValueError as e:
-        parser.error(str(e))
-    masks = load_stage(run.stage_dir("masks"), Masks)
-    names = json.loads((run.stage_dir("masks") / "metadata.json").read_text())["vocab"]
-    nodes = build_nodes(
-        masks,
-        load_stage(run.stage_dir("boxes"), Boxes),
-        load_stage(run.stage_dir("graph"), Graph),
-        names,
-    )
+    run = cli.runs(parser, args)[0]
+    _, _, nodes = load_nodes(run)
     edges = build_edges(nodes)
     counts = Counter(e.relation for e in edges)
     print(f"{run.source}: {len(nodes)} nodes, {len(edges)} edges ({counts['on']} on, {counts['near']} near)")
