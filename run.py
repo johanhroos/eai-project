@@ -107,9 +107,7 @@ def stale(run: Run, stage: str, params: dict | None = None) -> bool:
         return True
     if not run.done(stage):
         return True
-    if stage == "graph" and not all(
-        (run.stage_dir(stage) / f).exists() for f in ("memory/metadata.json", "matches.json", "history.json")
-    ):
+    if stage == "graph" and not all((run.stage_dir(stage) / f).exists() for f in ("matches.json", "history.json")):
         return True
     metadata = run.stage_dir(stage) / "metadata.json"
     cached = json.loads(metadata.read_text())

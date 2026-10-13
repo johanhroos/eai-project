@@ -20,17 +20,6 @@ def pad_bbox(bbox, image_shape, padding=0.1):
     return x1, y1, x2, y2
 
 
-def crop_bbox(image, bbox, padding=0.1):
-    """Crop one padded bounding box."""
-    x1, y1, x2, y2 = pad_bbox(bbox, image.shape, padding)
-    return image[y1:y2, x1:x2]
-
-
-def crop_bboxes(image, bboxes, padding=0.1):
-    """Crop multiple padded bounding boxes."""
-    return [crop_bbox(image, bbox, padding) for bbox in bboxes]
-
-
 def square_bbox(bbox, image_shape):
     """Grow an [x1, y1, x2, y2] box to a square around its centre, shifted to stay in the image where it fits."""
     x1, y1, x2, y2 = bbox

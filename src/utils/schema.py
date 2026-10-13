@@ -103,8 +103,7 @@ class Graph:
 
     Masks join the node of their SAM track, one frame at a time. A track that jumps to another object is cut, and new
     tracks are matched to the nodes by appearance and location, so several tracks can end up in one node and, where
-    SAM's ID switched objects, one track in several. A prefix replay (graph/visualize.py) uses -1 for the rows not
-    processed yet.
+    SAM's ID switched objects, one track in several. -1 marks the masks of nodes graph/refine.py dropped.
     """
 
     node: np.ndarray  # (N,) int32, node ID: 0, 1, ... in order of first appearance
@@ -259,46 +258,3 @@ def load_stage[T](stage_dir: Path, stage_class: type[T]) -> T:
         arrays = {k: f[k] for k in f.files}
     other = json.loads((stage_dir / "other.json").read_text())
     return stage_class(**arrays, **other)
-
-
-@dataclass
-class PersistentObjects:
-    """Compact memory snapshot; no masks, images or dense scene points required."""
-
-    object_id: np.ndarray
-    box_min: np.ndarray
-    box_max: np.ndarray
-    n_points: np.ndarray
-    dino: np.ndarray  # (n, max_descriptors, D) float16, each node's bank of DINO descriptors, zero-padded
-    siglip_sum: np.ndarray  # (n, D) float32, sum of the node's observations' SigLIP embeddings, for text search
-    siglip_count: np.ndarray
-    first_seen: np.ndarray
-    last_seen: np.ndarray
-    observation_count: np.ndarray
-    labels: list[str | None]
-    config: dict
-    next_id: int
-    last_frame: int | None
-    points: np.ndarray | None = None  # (n, P, 3) float16, a sample of each node's pooled reliable points, NaN-padded
-    track_id: np.ndarray | None = None  # (t,) int32, SAM IDs
-    track_node: np.ndarray | None = None  # (t,) int32, the node each SAM ID's masks join
-    frames: list[list[int]] | None = None  # the frames each node was seen in
-
-    def __post_init__(self):
-        n = len(self.object_id)
-        if self.points is not None:
-            _check("points", self.points, np.float16, (n, None, 3))
-        if self.track_id is not None:
-            _check("track_id", self.track_id, np.int32, (len(self.track_id),))
-            _check("track_node", self.track_node, np.int32, self.track_id.shape)
-        _check("object_id", self.object_id, np.int32, (n,))
-        for name in ("box_min", "box_max"):
-            _check(name, getattr(self, name), np.float32, (n, 3))
-        for name in ("n_points", "siglip_count", "first_seen", "last_seen", "observation_count"):
-            _check(name, getattr(self, name), np.int64, (n,))
-        _check("dino", self.dino, np.float16, (n, None, None))
-        _check("siglip_sum", self.siglip_sum, np.float32, (n, None))
-        if len(self.labels) != n or len(np.unique(self.object_id)) != n:
-            raise ValueError("invalid persistent node IDs or labels")
-        if n and self.next_id <= int(self.object_id.max()):
-            raise ValueError("next_id must exceed every stored ID")

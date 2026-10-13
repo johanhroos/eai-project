@@ -52,12 +52,6 @@ def box_gap(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
     return np.linalg.norm(np.clip(apart, 0, None), axis=2)
 
 
-def centre_distance(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
-    """(M, M) distance between the boxes' centres."""
-    centre = (lo + hi) / 2
-    return np.linalg.norm(centre[:, None] - centre[None], axis=2)
-
-
 def rests_on(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
     """(M, M) bool, [a, b] where box a rests on or in box b (see the module docstring)."""
     footprint = np.prod(

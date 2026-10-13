@@ -1,4 +1,4 @@
-"""Replay cached observations, persist compact objects, and rebuild on CPU.
+"""Replay cached observations into the object memory, refine its nodes and save the graph stage.
 
 The one model a rebuild may load is SigLIP 2's text encoder, on the GPU, once per vocabulary (vocab_text).
 """
@@ -6,7 +6,7 @@ The one model a rebuild may load is SigLIP 2's text encoder, on the GPU, once pe
 import copy
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
@@ -14,13 +14,12 @@ import numpy as np
 import pycocotools.mask as mask_utils
 
 from graph import refine, shape
-from graph.association import AssociationConfig, ObjectMemory, ObjectNode, Observation, normalized, valid_box
+from graph.association import AssociationConfig, ObjectMemory, Observation, normalized
 from graph.node import fit_box, mask_points, most_confident
 from utils.lift3d import Box3D, reliable
-from utils.schema import Boxes, Features, Graph, Masks, PersistentObjects, Run, TextAligned, load_stage, save_stage
+from utils.schema import Boxes, Features, Graph, Masks, Run, TextAligned, load_stage, save_stage
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "association.json"
-SNAPSHOT_POINTS = 512  # of each node's pooled points kept in a saved memory, so a restored node's box can grow
 
 
 def mean_descriptor(rows, values):
@@ -95,7 +94,6 @@ def replay(
     vocab: list[str],
     config: AssociationConfig | None = None,
     frames=None,
-    until: int | None = None,
 ) -> BuildResult:
     n = len(masks.frame)
     if any(len(a) != n for a in (boxes.n_points, features.dino, siglip.siglip)):
@@ -108,8 +106,6 @@ def replay(
     trusted = reliable(boxes)
     frames = np.unique(masks.frame) if frames is None else np.unique(np.r_[frames, masks.frame])
     for frame in frames:
-        if until is not None and frame > until:
-            break
         rows = np.flatnonzero(masks.frame == frame)
         groups = observation_groups(masks, rows, memory.config.duplicate_iou)
         observations = [observation(masks, boxes, features, siglip, vocab, trusted, group) for group in groups]
@@ -120,89 +116,13 @@ def replay(
         merges += memory.last_merges
         history.append({"frame": int(frame), "nodes": len(memory.nodes), "observations": len(groups)})
     # Masks of a node that was merged go to the node it went into. IDs stay those of the memory, in order of creation
-    # with gaps where nodes merged, so a prefix replay (until) shows its nodes under the IDs of the full one.
+    # with gaps where nodes merged.
     done = assignments >= 0
     assignments[done] = [memory.find(int(i)) for i in assignments[done]]
     for trace in matches:
         for key in ("object_id", "candidate_id"):
             trace[key] = None if trace[key] is None else memory.find(trace[key])
     return BuildResult(Graph(assignments), memory, matches, history, merges)
-
-
-def snapshot(memory: ObjectMemory) -> PersistentObjects:
-    nodes = sorted(memory.nodes.values(), key=lambda n: n.id)
-    n, k = len(nodes), memory.config.max_descriptors
-
-    def bank(name):
-        dimension = max((len(e) for node in nodes for e in getattr(node, name)), default=0)
-        data = np.zeros((n, k, dimension), np.float16)
-        for row, node in enumerate(nodes):
-            for i, e in enumerate(getattr(node, name)):
-                data[row, i] = e
-        return data
-
-    dino = bank("descriptors")
-    sums = np.zeros((n, memory.siglip_dimension or 0), np.float32)
-    lo, hi = np.full((n, 3), np.nan, np.float32), np.full((n, 3), np.nan, np.float32)
-    counts = np.zeros(n, np.int64)
-    points = np.full((n, SNAPSHOT_POINTS, 3), np.nan, np.float16)
-    for row, node in enumerate(nodes):
-        if valid_box(node.box):
-            lo[row], hi[row], counts[row] = node.box.min, node.box.max, node.box.n_points
-        if node.siglip_sum is not None:
-            sums[row] = node.siglip_sum
-        if node.reliable:
-            keep = np.unique(np.linspace(0, len(node.points) - 1, SNAPSHOT_POINTS).astype(int))
-            points[row, : len(keep)] = node.points[keep]
-    return PersistentObjects(
-        np.array([node.id for node in nodes], np.int32),
-        lo,
-        hi,
-        counts,
-        dino,
-        sums,
-        *[
-            np.array([getattr(node, name) for node in nodes], np.int64)
-            for name in ("siglip_count", "first_seen", "last_seen", "observation_count")
-        ],
-        [node.label for node in nodes],
-        asdict(memory.config),
-        memory.next_id,
-        memory.last_frame,
-        points,
-        np.array(list(memory.tracks), np.int32),
-        np.array([memory.find(i) for i in memory.tracks.values()], np.int32),
-        [sorted(node.frames) for node in nodes],
-    )
-
-
-def save_memory(path: Path, memory: ObjectMemory) -> None:
-    save_stage(path, snapshot(memory), memory.config.metadata())
-
-
-def load_memory(path: Path) -> ObjectMemory:
-    data = load_stage(path, PersistentObjects)
-    memory = ObjectMemory(AssociationConfig(**data.config))
-    memory.next_id, memory.last_frame = data.next_id, data.last_frame
-    memory.dino_dimension = data.dino.shape[2] or None
-    memory.siglip_dimension = data.siglip_sum.shape[1] or None
-    for row, object_id in enumerate(data.object_id):
-        node = ObjectNode(int(object_id), data.labels[row])
-        if data.n_points[row] > 0:
-            node.box = Box3D(data.box_min[row].copy(), data.box_max[row].copy(), int(data.n_points[row]))
-            node.fallback = node.box
-        if data.points is not None:
-            pts = data.points[row].astype(np.float32)
-            node.points = pts[np.isfinite(pts).all(axis=1)] if np.isfinite(pts).any() else None
-        node.frames = set(data.frames[row]) if data.frames is not None else set()
-        node.descriptors = [e.copy() for e in data.dino[row] if normalized(e) is not None]
-        node.siglip_sum = data.siglip_sum[row].copy() if data.siglip_count[row] else None
-        for name in ("siglip_count", "first_seen", "last_seen", "observation_count"):
-            setattr(node, name, int(getattr(data, name)[row]))
-        memory.nodes[node.id] = node
-    if data.track_id is not None:
-        memory.tracks = dict(zip(data.track_id.tolist(), data.track_node.tolist(), strict=True))
-    return memory
 
 
 def metadata(config: AssociationConfig, finished: bool = True) -> dict:
@@ -265,10 +185,10 @@ def save_result(path: Path, result: BuildResult, finish: Finish | None = None) -
     finish(node), such as pipeline.finish for the run, takes the memory's node of every mask and gives the saved one
     (-1 for none), the saved nodes' boxes and labels, and a record, saved as refine.json. Without it the memory's nodes
     are saved as they are, without boxes or labels: graph.node.build_nodes then draws the boxes around the pooled
-    points and counts SAM's votes for the labels. memory/ holds the
-    memory as the video left it, by its own IDs; refine.json's "memory_to_graph" maps each to the saved node that holds
-    most of its masks (null if it holds none). The traces get the saved IDs: a match's object_id is the node of its
-    masks, and a merge's trace keeps the IDs of the time and adds the saved node as "node".
+    points and counts SAM's votes for the labels. refine.json's "memory_to_graph" maps each of the memory's nodes to
+    the saved node that holds most of its masks (null if it holds none). The traces get the saved IDs: a match's
+    object_id is the node of its masks, and a merge's trace keeps the IDs of the time and adds the saved node as
+    "node".
     """
     if np.any(result.graph.node < 0):
         raise ValueError("cannot save an incomplete prefix as the full graph")
@@ -290,7 +210,6 @@ def save_result(path: Path, result: BuildResult, finish: Finish | None = None) -
         candidate = None if m["candidate_id"] is None else saved.get(mapping[m["candidate_id"]])
         matches.append({**m, "object_id": object_id, "candidate_id": candidate})
     merges = [{**m, "node": saved.get(mapping[m["kept"]])} for m in result.merges]
-    save_memory(path / "memory", memory)
     (path / "refine.json").unlink(missing_ok=True)
     traces = [("matches", matches), ("history", result.history), ("merges", merges)]
     if record is not None:
@@ -323,26 +242,3 @@ def rebuild(run: Run, config: AssociationConfig | None = None, save: bool = True
     if save:
         save_result(run.stage_dir("graph"), result, partial(finish, run, *observations))
     return result
-
-
-def main():
-    import argparse
-
-    from utils import footage, vocab
-
-    parser = argparse.ArgumentParser(description="Rebuild graph from cached observations (see the module docstring)")
-    parser.add_argument("--source", default="replica/room_0/00")
-    parser.add_argument("--stride", type=int, default=20)
-    parser.add_argument("--mask-source", default="sam3", choices=["sam3", "gt"])
-    parser.add_argument("--pose-source", default="gt", choices=["gt", "vggt"])
-    parser.add_argument("--vocab")
-    parser.add_argument("--association-config", type=Path, default=DEFAULT_CONFIG)
-    args = parser.parse_args()
-    run = footage.make_run(args.source, args.stride, args.mask_source, args.pose_source, vocab.tag(args.vocab))
-    rebuild(run, AssociationConfig.from_json(args.association_config))
-    node = load_stage(run.stage_dir("graph"), Graph).node
-    print(f"Saved {len(np.unique(node[node >= 0]))} objects to {run.stage_dir('graph')}")
-
-
-if __name__ == "__main__":
-    main()
