@@ -32,14 +32,9 @@ objects rather than more, and only those whose box can be trusted:
              frames, its points in view lie inside its own mask, as one static object's do), and not only ever small
              and far. The others' masks get node -1.
 
-On the 8 Replica scenes with VGGT-Omega's depth, a scene keeps 46 nodes of the memory's 121, and 7 of them match no GT
-object instead of 48; 5% of the object boxes kept are off (IoU under 0.2), against 21%, and their mean IoU is 0.54
-instead of 0.45. Of the 368 revisits (an object leaves the view and comes back), the merges keep the object's node in
-224 and switch it in 34, against 214 and 47 for the memory alone; after the last step 203 keep it and 17 switch, and
-38 more fall on nodes that were dropped. The price is the objects whose box couldn't be checked: 18.5 objects a scene
-get a good box (IoU 0.5 or more) instead of 25. Checked alone against Replica's objects, 41 of 42 box merges, all 14
-consensus merges between objects and 89% of the duplicate merges joined one object. refine returns the node of every
-mask after all of this, the nodes' labels, and what each step did, for the graph stage's refine.json.
+refine returns the node of every mask after all of this, the nodes' labels, and what each step did, for the graph
+stage's refine.json. What the steps change on Replica and on phone video is measured in the README (the graph stage,
+step 7).
 """
 
 import warnings
