@@ -6,17 +6,13 @@ joins that node. DINO appearance and 3D location decide the rest:
          that mask (DINO cosine under CUT_DINO) and the two boxes don't touch (CUT_DINO_GAP), or it matches another
          node SWITCH_MARGIN better than its own, SAM's ID went over to another object: the rest of the track is matched
          like a new one. SAM switches between objects that look alike (identical chairs) and between neighbours (a
-         cushion and its sofa), so each cue finds switches the others miss. A DINO drop with the boxes still touching
-         is mostly the same object seen from another side: cutting there too found 73% of SAM's switches on Replica
-         instead of 69%, but also cut 3.2% of the steps within one object instead of 0.7%. A wrong cut costs little:
-         the merge below joins the pieces again. In a frame where several tracks move over CUT_GAP at once
-         (BAD_FRAME_TRACKS), the camera pose is off, and nothing is cut by these cues. With CUT_AFTER above 1, a track
-         is cut only where it jumps by the gap or DINO in that many reliable masks in a row, and until then a mask that
-         jumped stays with the node as a member only, like an unreliable mask. That keeps a one-frame jump from making
-         a node of one mask (on IMG_0649, 20 such nodes instead of 34 with 2), but such a jump is mostly SAM's mask on
-         another object for a frame (211 of 606 switches on Replica go back the next mask), which then lands in the
-         wrong node: on Replica, IDF1 fell from 0.598 to 0.588 and GT objects per node rose from 1.15 to 1.28. A node
-         takes one mask per frame: of two masks whose tracks lead to it, the one that matches it less is cut.
+         cushion and its sofa), so each cue finds switches the others miss. A wrong cut costs little: the merge below
+         joins the pieces again. In a frame where several tracks move over CUT_GAP at once (BAD_FRAME_TRACKS), the
+         camera pose is off, and nothing is cut by these cues. With CUT_AFTER above 1, a track is cut only where it
+         jumps by the gap or DINO in that many reliable masks in a row, and until then a mask that jumped stays with
+         the node as a member only, like an unreliable mask. A node takes one mask per frame: of two masks whose tracks
+         lead to it, the one that matches it less is cut. Why the constants have the values they have is measured in
+         the README (the graph stage, step 3).
   match  a new track, or the rest of a cut one, joins the node in memory it matches, or becomes a new node
   merge  a node that gets a reliable view joins an older node it matches, unless the two were ever seen in one frame:
          an object back in view under a new SAM ID, or one first seen too far away to match

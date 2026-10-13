@@ -14,13 +14,8 @@ the mask in at least SUPPORT of the views where it is in the image and not hidde
 the mask in the views from other directions. The box is around the kept points without the outer TRIM percent on each
 axis.
 
-On the 8 Replica scenes, over the nodes of objects other than walls, floors and ceilings, these boxes overlap the GT
-objects' boxes more than graph.nodes.node_box's around all the pooled points: IoU 0.38 to 0.45 with VGGT-Omega's depth
-(both boxes grown by 5 cm on each side), 0.41 to 0.51 with Replica's, and 0.55 to 0.61 with GT masks and VGGT-Omega's
-depth, so most of what is left is the grouping and the depth. Voting with the boxes stage's samples gave 0.43, 0.48
-and 0.58. Lifting like views/rerun_map.py's point cloud, without depth edges and thinned to one point per 2 cm but
-without robust_filter, gave 0.41: the map's cloud has the same streaks, it only shows them as a few specks among the
-surfaces, and thinning gives those specks as much weight as the surfaces.
+How much closer these boxes come to the GT objects' than other ways of drawing them is measured in the README (the
+graph stage, step 8).
 
 The graph stage keeps these boxes (Graph.box_min and box_max), and graph.nodes.build_nodes uses them. The object
 memory can't: it only knows the frames so far, and boxes around the pooled points (graph.nodes.node_box) are what it
