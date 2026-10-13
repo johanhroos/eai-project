@@ -15,11 +15,10 @@ import pycocotools.mask as mask_utils
 
 from data.stages import Boxes, Features, Graph, Masks, Run, TextAligned, load_stage, mask_vocab, save_stage
 from geometry.mask_boxes import Box3D, reliable
+from graph import memory as object_memory
 from graph import multiview, refine
-from graph.memory import AssociationConfig, ObjectMemory, Observation, normalized
+from graph.memory import DUPLICATE_IOU, ObjectMemory, Observation, normalized
 from graph.nodes import fit_box, mask_points, most_confident
-
-DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "configs" / "association.json"
 
 
 def mean_descriptor(rows, values):
@@ -92,7 +91,6 @@ def replay(
     features: Features,
     siglip: TextAligned,
     vocab: list[str],
-    config: AssociationConfig | None = None,
     frames=None,
 ) -> BuildResult:
     n = len(masks.frame)
@@ -100,14 +98,14 @@ def replay(
         raise ValueError("all observation stages must be row-aligned")
     if n and (masks.prompt.min() < 0 or masks.prompt.max() >= len(vocab)):
         raise ValueError("mask prompt index outside vocabulary")
-    memory = ObjectMemory(config)
+    memory = ObjectMemory()
     assignments = np.full(n, -1, np.int32)
     matches, history, merges = [], [], []
     trusted = reliable(boxes)
     frames = np.unique(masks.frame) if frames is None else np.unique(np.r_[frames, masks.frame])
     for frame in frames:
         rows = np.flatnonzero(masks.frame == frame)
-        groups = observation_groups(masks, rows, memory.config.duplicate_iou)
+        groups = observation_groups(masks, rows, DUPLICATE_IOU)
         observations = [observation(masks, boxes, features, siglip, vocab, trusted, group) for group in groups]
         ids = memory.associate_frame(int(frame), observations)
         for group, object_id, trace in zip(groups, ids, memory.last_matches, strict=True):
@@ -125,10 +123,10 @@ def replay(
     return BuildResult(Graph(assignments), memory, matches, history, merges)
 
 
-def metadata(config: AssociationConfig, finished: bool = True) -> dict:
+def metadata(finished: bool = True) -> dict:
     """The graph stage's metadata: the memory's settings, and those of finish's steps if they ran."""
     return {
-        **config.metadata(),
+        **object_memory.metadata(),
         "refine": refine.PARAMS if finished else None,
         "object_boxes": multiview.PARAMS if finished else None,
     }
@@ -216,7 +214,7 @@ def save_result(path: Path, result: BuildResult, finish: Finish | None = None) -
         traces.append(("refine", {**record, "memory_to_graph": saved}))
     for name, data in traces:
         (path / f"{name}.json").write_text(json.dumps(data, indent=2, allow_nan=False))
-    save_stage(path, Graph(node, lo, hi, label), metadata(result.memory.config, finish is not None))
+    save_stage(path, Graph(node, lo, hi, label), metadata(finish is not None))
 
 
 def cached_observations(run: Run):
@@ -233,12 +231,12 @@ def cached_observations(run: Run):
     return (*data, vocab)
 
 
-def rebuild(run: Run, config: AssociationConfig | None = None, save: bool = True) -> BuildResult:
+def rebuild(run: Run, save: bool = True) -> BuildResult:
     # Source frame numbers include frames with no detections.
     from data import footage
 
     observations = cached_observations(run)
-    result = replay(*observations, config=config, frames=footage.frame_numbers(run))
+    result = replay(*observations, frames=footage.frame_numbers(run))
     if save:
         save_result(run.stage_dir("graph"), result, partial(finish, run, *observations))
     return result

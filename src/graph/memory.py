@@ -2,15 +2,15 @@
 
 SAM 3's tracker is mostly right about which masks are one object, so a mask whose SAM ID already belongs to a node
 joins that node. DINO appearance and 3D location decide the rest:
-  cut    where a track's box is more than cut_gap from the box of its last reliable mask, or it looks different from
-         that mask (DINO cosine under cut_dino) and the two boxes don't touch (cut_dino_gap), or it matches another
-         node switch_margin better than its own, SAM's ID went over to another object: the rest of the track is matched
+  cut    where a track's box is more than CUT_GAP from the box of its last reliable mask, or it looks different from
+         that mask (DINO cosine under CUT_DINO) and the two boxes don't touch (CUT_DINO_GAP), or it matches another
+         node SWITCH_MARGIN better than its own, SAM's ID went over to another object: the rest of the track is matched
          like a new one. SAM switches between objects that look alike (identical chairs) and between neighbours (a
          cushion and its sofa), so each cue finds switches the others miss. A DINO drop with the boxes still touching
          is mostly the same object seen from another side: cutting there too found 73% of SAM's switches on Replica
          instead of 69%, but also cut 3.2% of the steps within one object instead of 0.7%. A wrong cut costs little:
-         the merge below joins the pieces again. In a frame where several tracks move over cut_gap at once
-         (bad_frame_tracks), the camera pose is off, and nothing is cut by these cues. With cut_after above 1, a track
+         the merge below joins the pieces again. In a frame where several tracks move over CUT_GAP at once
+         (BAD_FRAME_TRACKS), the camera pose is off, and nothing is cut by these cues. With CUT_AFTER above 1, a track
          is cut only where it jumps by the gap or DINO in that many reliable masks in a row, and until then a mask that
          jumped stays with the node as a member only, like an unreliable mask. That keeps a one-frame jump from making
          a node of one mask (on IMG_0649, 20 such nodes instead of 34 with 2), but such a jump is mostly SAM's mask on
@@ -24,7 +24,7 @@ joins that node. DINO appearance and 3D location decide the rest:
 A match scores DINO appearance and location. The DINO cosine is clipped to [0, 1] and geometry is in [0, 1]: how
 much of the smaller box lies inside the other (mask_boxes.box_containment), and how close the centres are. Containment
 rather than IoU, since a view of part of an object lies inside the object's box, which has grown to all its views, and
-IoU would score it near 0. Enabled nonnegative weights are normalized once. Missing cues score zero with no per-pair
+IoU would score it near 0. The two weights are normalized to sum to 1. Missing cues score zero with no per-pair
 weight renormalization, so a match with less evidence cannot inflate its score.
 
 Only reliable masks (mask_boxes.reliable: enough depth, and confident where the depth has a confidence) are evidence.
@@ -35,9 +35,7 @@ view sets it. The saved graph draws each node's box again from every view of it 
 the frames. SigLIP takes no part in matching; each node sums its observations' SigLIP embeddings for text search.
 """
 
-import json
-from dataclasses import asdict, dataclass, field, replace
-from pathlib import Path
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -50,74 +48,44 @@ def box_gap(a: Box3D, b: Box3D) -> float:
     return float(np.linalg.norm(np.clip(np.maximum(a.min - b.max, b.min - a.max), 0, None)))
 
 
-@dataclass(frozen=True)
-class AssociationConfig:
-    dino_weight: float = 0.45
-    box_weight: float = 0.4
-    enable_dino: bool = True
-    enable_geometry: bool = True
-    threshold: float = 0.55  # above each weight alone (0.53, 0.47): DINO and location must both agree
-    max_descriptors: int = 4
-    max_candidate_distance: float | None = 1.0  # metres between box centres; None disables gate
-    geometry_inside_weight: float = 0.5  # 1 = containment only; 0 = centre distance only
-    center_distance_scale: float = 0.5  # metres; similarity exp(-distance / scale)
-    descriptor_duplicate_similarity: float = 0.95
-    require_same_label: bool = False
-    duplicate_iou: float = 0.6
-    follow_tracks: bool = True  # a mask joins its SAM track's node; False matches every mask on its own, never merges
-    cut_gap: float = 0.3  # metres between a track's box and its last reliable one's at which the track is cut
-    cut_dino: float = 0.5  # DINO cosine to the track's last reliable mask under which it is cut
-    cut_dino_gap: float | None = 0.0  # metres the boxes must also be apart for a DINO cut; None: DINO alone cuts
-    cut_after: int = 1  # reliable masks in a row a track must jump in (by cut_gap or cut_dino) before it is cut
-    bad_frame_tracks: int = 3  # a frame where this many tracks, and at least half, move over cut_gap cuts none
-    switch_margin: float | None = 0.2  # score by which another node must match a track's mask better to cut it
+DINO_WEIGHT = 0.45  # of a match's score: DINO appearance; the two weights are normalized to sum to 1 (WEIGHTS)
+BOX_WEIGHT = 0.4  # of a match's score: location
+THRESHOLD = 0.55  # above each weight alone (0.53, 0.47): DINO and location must both agree
+MAX_DESCRIPTORS = 4  # DINO descriptors a node keeps: the most different of its reliable views'
+MAX_CANDIDATE_DISTANCE = 1.0  # metres between box centres beyond which a node is no candidate
+GEOMETRY_INSIDE_WEIGHT = 0.5  # of location: 1 = containment only; 0 = centre distance only
+CENTER_DISTANCE_SCALE = 0.5  # metres; centre similarity exp(-distance / scale)
+DESCRIPTOR_DUPLICATE_SIMILARITY = 0.95  # DINO cosine to a kept descriptor above which a new one isn't kept
+DUPLICATE_IOU = 0.6  # masks of one frame that overlap this much are one observation (graph.build.observation_groups)
+CUT_GAP = 0.3  # metres between a track's box and its last reliable one's at which the track is cut
+CUT_DINO = 0.5  # DINO cosine to the track's last reliable mask under which it is cut
+CUT_DINO_GAP = 0.0  # metres the boxes must also be apart for a DINO cut
+CUT_AFTER = 1  # reliable masks in a row a track must jump in (by CUT_GAP or CUT_DINO) before it is cut
+BAD_FRAME_TRACKS = 3  # a frame where this many tracks, and at least half, move over CUT_GAP cuts none
+SWITCH_MARGIN = 0.2  # score by which another node must match a track's mask better to cut it
+WEIGHTS = tuple((np.array([DINO_WEIGHT, BOX_WEIGHT]) / np.sum([DINO_WEIGHT, BOX_WEIGHT])).tolist())
+PARAMS = {
+    "dino_weight": DINO_WEIGHT,
+    "box_weight": BOX_WEIGHT,
+    "threshold": THRESHOLD,
+    "max_descriptors": MAX_DESCRIPTORS,
+    "max_candidate_distance": MAX_CANDIDATE_DISTANCE,
+    "geometry_inside_weight": GEOMETRY_INSIDE_WEIGHT,
+    "center_distance_scale": CENTER_DISTANCE_SCALE,
+    "descriptor_duplicate_similarity": DESCRIPTOR_DUPLICATE_SIMILARITY,
+    "duplicate_iou": DUPLICATE_IOU,
+    "cut_gap": CUT_GAP,
+    "cut_dino": CUT_DINO,
+    "cut_dino_gap": CUT_DINO_GAP,
+    "cut_after": CUT_AFTER,
+    "bad_frame_tracks": BAD_FRAME_TRACKS,
+    "switch_margin": SWITCH_MARGIN,
+}
 
-    def __post_init__(self):
-        weights = (self.dino_weight, self.box_weight)
-        if not all(np.isfinite(w) and w >= 0 for w in weights):
-            raise ValueError("weights must be finite and nonnegative")
-        if sum(self.effective_weights) <= 0:
-            raise ValueError("at least one enabled component must have positive weight")
-        for value in (
-            self.threshold,
-            self.geometry_inside_weight,
-            self.descriptor_duplicate_similarity,
-            self.duplicate_iou,
-            self.cut_dino,
-        ):
-            if not np.isfinite(value) or not 0 <= value <= 1:
-                raise ValueError("thresholds and fractions must be between zero and one")
-        for count in (self.max_descriptors, self.bad_frame_tracks, self.cut_after):
-            if not isinstance(count, int) or isinstance(count, bool) or count < 1:
-                raise ValueError("max_descriptors, bad_frame_tracks and cut_after must be positive integers")
-        for scale in (self.center_distance_scale, self.cut_gap):
-            if not np.isfinite(scale) or scale <= 0:
-                raise ValueError("center_distance_scale and cut_gap must be finite and positive")
-        if self.max_candidate_distance is not None and (
-            not np.isfinite(self.max_candidate_distance) or self.max_candidate_distance <= 0
-        ):
-            raise ValueError("max_candidate_distance must be positive or null")
-        if self.switch_margin is not None and (not np.isfinite(self.switch_margin) or self.switch_margin < 0):
-            raise ValueError("switch_margin must be nonnegative or null")
-        if self.cut_dino_gap is not None and (not np.isfinite(self.cut_dino_gap) or self.cut_dino_gap < 0):
-            raise ValueError("cut_dino_gap must be nonnegative or null")
-        for enabled in (self.enable_dino, self.enable_geometry, self.require_same_label, self.follow_tracks):
-            if not isinstance(enabled, bool):
-                raise ValueError("component switches must be booleans")
 
-    @property
-    def effective_weights(self) -> tuple[float, float]:
-        raw = np.array([self.dino_weight if self.enable_dino else 0, self.box_weight if self.enable_geometry else 0])
-        total = raw.sum()
-        return tuple((raw / total if total > 0 else raw).tolist())
-
-    @classmethod
-    def from_json(cls, path: str | Path):
-        return cls(**json.loads(Path(path).read_text()))
-
-    def metadata(self) -> dict:
-        # The reliable masks depend on mask_boxes.MIN_CONFIDENCE too, so a new value rebuilds the graph
-        return {"algorithm": "track-association-v2", "config": asdict(self), "min_confidence": MIN_CONFIDENCE}
+def metadata() -> dict:
+    """The memory's part of the graph stage's metadata. The reliable masks depend on MIN_CONFIDENCE too."""
+    return {"algorithm": "track-association-v2", "config": PARAMS, "min_confidence": MIN_CONFIDENCE}
 
 
 def normalized(descriptor: np.ndarray | None) -> np.ndarray | None:
@@ -157,14 +125,14 @@ def prototype_similarity(descriptor, bank) -> float:
     return max(sims, default=0.0)
 
 
-def update_bank(bank, descriptor, config):
+def update_bank(bank, descriptor):
     e = normalized(descriptor)
     if e is None or (bank and e.shape != bank[0].shape):
         return bank
-    if bank and prototype_similarity(e, bank) >= config.descriptor_duplicate_similarity:
+    if bank and prototype_similarity(e, bank) >= DESCRIPTOR_DUPLICATE_SIMILARITY:
         return bank
     candidates = [*bank, e.astype(np.float16)]
-    if len(candidates) > config.max_descriptors:
+    if len(candidates) > MAX_DESCRIPTORS:
         stack = np.stack(candidates).astype(np.float32)
         matrix = stack @ stack.T
         np.fill_diagonal(matrix, -np.inf)
@@ -246,20 +214,18 @@ class ObjectMemory:
     one-to-one within a frame. Match traces contain selected/best candidate scores before updates.
     """
 
-    def __init__(self, config: AssociationConfig | None = None):
-        self.config = config or AssociationConfig()
+    def __init__(self):
         self.nodes: dict[int, ObjectNode] = {}
         self.next_id = 0
         self.last_frame: int | None = None
         self.last_matches: list[dict] = []
         self.last_merges: list[dict] = []
-        self.weights = self.config.effective_weights
         self.dino_dimension: int | None = None
         self.siglip_dimension: int | None = None
         self.tracks: dict[int, int] = {}  # SAM ID -> the node its masks join
         self.track_last: dict[int, tuple[np.ndarray | None, Box3D]] = {}  # SAM ID -> DINO, box of last reliable mask
         self.merged: dict[int, int] = {}  # node ID -> the node it was merged into
-        self.jumps: dict[int, int] = {}  # SAM ID -> reliable masks in a row it jumped in, while under cut_after
+        self.jumps: dict[int, int] = {}  # SAM ID -> reliable masks in a row it jumped in, while under CUT_AFTER
 
     def find(self, object_id: int) -> int:
         """The node an ID stands for now, after merges."""
@@ -268,12 +234,13 @@ class ObjectMemory:
         return object_id
 
     def components(self, observation: Observation, node: ObjectNode) -> dict:
-        return self._pair([observation.dino], observation.box, observation.label, node)
+        return self._pair([observation.dino], observation.box, node)
 
-    def _pair(self, descriptors, box: Box3D | None, label: str | None, node: ObjectNode) -> dict:
-        """The match scores of an observation's, or another node's, descriptors and box against a node."""
-        c = self.config
-        compatible = not (c.require_same_label and label and node.label and label != node.label)
+    def _pair(self, descriptors, box: Box3D | None, node: ObjectNode) -> dict:
+        """The match scores of an observation's, or another node's, descriptors and box against a node.
+
+        compatible is False for a node over MAX_CANDIDATE_DISTANCE away, which scores 0.
+        """
         empty = {
             "dino": 0.0,
             "inside": 0.0,
@@ -283,23 +250,18 @@ class ObjectMemory:
             "score": 0.0,
             "compatible": False,
         }
-        if not compatible:
-            return empty
         distance = None
         inside = center = 0.0
         if valid_box(box) and valid_box(node.box):
             distance = float(np.linalg.norm(box.center - node.box.center))
-            if c.max_candidate_distance is not None and distance > c.max_candidate_distance:
+            if distance > MAX_CANDIDATE_DISTANCE:
                 return {**empty, "distance": distance}
             inside = float(box_containment(box, node.box))
             inside = float(np.clip(inside, 0, 1)) if np.isfinite(inside) else 0.0
-            center = float(np.exp(-distance / c.center_distance_scale))
-        dino = 0.0
-        if c.enable_dino:
-            dino = max((prototype_similarity(d, node.descriptors) for d in descriptors), default=0.0)
-        w = c.geometry_inside_weight
-        geometry = w * inside + (1 - w) * center if c.enable_geometry else 0.0
-        wd, wg = self.weights
+            center = float(np.exp(-distance / CENTER_DISTANCE_SCALE))
+        dino = max((prototype_similarity(d, node.descriptors) for d in descriptors), default=0.0)
+        geometry = GEOMETRY_INSIDE_WEIGHT * inside + (1 - GEOMETRY_INSIDE_WEIGHT) * center
+        wd, wg = WEIGHTS
         score = float(wd * dino + wg * geometry)
         return {
             "dino": dino,
@@ -308,7 +270,7 @@ class ObjectMemory:
             "distance": distance,
             "geometry": geometry,
             "score": score,
-            "compatible": bool(compatible),
+            "compatible": True,
         }
 
     def score(self, observation: Observation, node: ObjectNode) -> float:
@@ -331,44 +293,38 @@ class ObjectMemory:
     def _jumped(self, dino: float, gap: float) -> bool:
         """Whether a track's move (_move) cuts it.
 
-        It is with a gap over cut_gap, or a DINO cosine under cut_dino where the boxes are also over cut_dino_gap apart.
+        It is with a gap over CUT_GAP, or a DINO cosine under CUT_DINO where the boxes are also over CUT_DINO_GAP apart.
         """
-        c = self.config
-        return gap > c.cut_gap or (dino < c.cut_dino and (c.cut_dino_gap is None or gap > c.cut_dino_gap))
+        return gap > CUT_GAP or (dino < CUT_DINO and gap > CUT_DINO_GAP)
 
     def _rival(self, observation: Observation, object_id: int) -> dict | None:
-        """The other node a track's mask matches switch_margin better than its own, as {"own", "rival", "score"}.
+        """The other node a track's mask matches SWITCH_MARGIN better than its own, as {"own", "rival", "score"}.
 
         None if there is none. SAM switches between neighbours that look alike, where neither the gap nor DINO tell.
         """
-        c = self.config
-        if c.switch_margin is None:
-            return None
         own = self.components(observation, self.nodes[object_id])["score"]  # 0 when over max_candidate_distance away
         best = None
         for other_id, other in self.nodes.items():
             if other_id != object_id and other.reliable:
                 score = self.score(observation, other)
-                if score > c.threshold and score > own + c.switch_margin and (best is None or score > best[1]):
+                if score > THRESHOLD and score > own + SWITCH_MARGIN and (best is None or score > best[1]):
                     best = (other_id, score)
         return None if best is None else {"own": own, "rival": best[0], "score": best[1]}
 
     def associate_frame(self, frame: int, observations: list[Observation]) -> np.ndarray:
         if self.last_frame is not None and frame <= self.last_frame:
             raise ValueError("frames must be strictly increasing; submit all observations together")
-        c = self.config
         self.last_merges = []
         # SAM's tracks first: a mask whose track has a node joins it, unless the track jumped to another object
         follow = {}
-        if c.follow_tracks:
-            for row, observation in enumerate(observations):
-                nodes = sorted({self.find(self.tracks[s]) for s in observation.sam_ids if s in self.tracks})
-                if nodes:
-                    follow[row] = nodes
+        for row, observation in enumerate(observations):
+            nodes = sorted({self.find(self.tracks[s]) for s in observation.sam_ids if s in self.tracks})
+            if nodes:
+                follow[row] = nodes
         moves = {row: self._move(observations[row]) for row in follow}
         moved = [m for m in moves.values() if m is not None]
-        jumped = sum(gap > c.cut_gap for _, gap in moved)
-        bad_pose = jumped >= c.bad_frame_tracks and 2 * jumped >= len(moved)
+        jumped = sum(gap > CUT_GAP for _, gap in moved)
+        bad_pose = jumped >= BAD_FRAME_TRACKS and 2 * jumped >= len(moved)
         followed, cuts, held = {}, {}, {}
         observations = list(observations)
         for row, nodes in follow.items():
@@ -380,12 +336,12 @@ class ObjectMemory:
                         self.jumps.pop(s, None)
                 else:
                     jumps = 1 + max((self.jumps.get(s, 0) for s in sam_ids), default=0)
-                    if jumps >= c.cut_after:
+                    if jumps >= CUT_AFTER:
                         for s in sam_ids:
                             self.jumps.pop(s, None)
                         cuts[row] = {"dino": move[0], "gap": move[1]}
                         continue
-                    # Not cut yet (cut_after): it stays with the node, but only as its member, like an unreliable mask
+                    # Not cut yet (CUT_AFTER): it stays with the node, but only as its member, like an unreliable mask
                     for s in sam_ids:
                         self.jumps[s] = jumps
                     held[row] = {"dino": move[0], "gap": move[1], "jumps": jumps}
@@ -428,7 +384,7 @@ class ObjectMemory:
                     continue
                 if row not in best or parts["score"] > best[row][1]["score"]:
                     best[row] = (object_id, parts)
-                if parts["score"] > c.threshold:
+                if parts["score"] > THRESHOLD:
                     pairs.append((-parts["score"], row, object_id, parts))
         assigned, used = {}, set()
         for _, row, object_id, parts in sorted(pairs, key=lambda p: p[:3]):
@@ -468,9 +424,8 @@ class ObjectMemory:
             ids[row] = node.id
             if observation.reliable:
                 evidence.append(node.id)
-        if c.follow_tracks:
-            for object_id in dict.fromkeys(evidence):
-                self._merge_into_older(self.find(object_id), frame)
+        for object_id in dict.fromkeys(evidence):
+            self._merge_into_older(self.find(object_id), frame)
         self.last_frame = int(frame)
         return np.array([self.find(i) for i in ids], np.int32)
 
@@ -481,8 +436,8 @@ class ObjectMemory:
         for other_id, other in self.nodes.items():
             if other_id == object_id or not other.reliable:
                 continue
-            parts = self._pair(node.descriptors, node.box, node.label, other)
-            if not parts["compatible"] or parts["score"] <= self.config.threshold:
+            parts = self._pair(node.descriptors, node.box, other)
+            if not parts["compatible"] or parts["score"] <= THRESHOLD:
                 continue
             if node.frames.isdisjoint(other.frames) and (best is None or parts["score"] > best[1]["score"]):
                 best = (other_id, parts)
@@ -502,7 +457,7 @@ class ObjectMemory:
         if gone.fallback_conf > keep.fallback_conf:
             keep.fallback, keep.fallback_conf = gone.fallback, gone.fallback_conf
         for descriptor in gone.descriptors:
-            keep.descriptors = update_bank(keep.descriptors, descriptor, self.config)
+            keep.descriptors = update_bank(keep.descriptors, descriptor)
         if gone.siglip_sum is not None:
             if keep.siglip_sum is None:
                 keep.siglip_sum = gone.siglip_sum.copy()
@@ -540,7 +495,6 @@ class ObjectMemory:
         return mapping
 
     def _update(self, node: ObjectNode, observation: Observation, frame: int, track: bool = True) -> None:
-        c = self.config
         dino = normalized(observation.dino)
         e = normalized(observation.siglip)
         if dino is not None:
@@ -555,7 +509,7 @@ class ObjectMemory:
             node.siglip_sum = e.copy() if node.siglip_sum is None else node.siglip_sum + e
             node.siglip_count += 1
         if observation.reliable:
-            node.descriptors = update_bank(node.descriptors, dino, c)
+            node.descriptors = update_bank(node.descriptors, dino)
             points = observation.points
             node.points = points.copy() if node.points is None else np.concatenate([node.points, points])
         elif valid_box(observation.box):
