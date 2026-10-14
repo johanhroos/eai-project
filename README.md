@@ -158,3 +158,73 @@ wget -P data/openlex3d_predictions http://aisdatasets.cs.uni-freiburg.de/openlex
 unzip data/openlex3d_predictions/predictions_sparse.zip -d data/openlex3d_predictions/extracted
 uv run --no-sync python evaluate_openlex3d.py --baselines concept-graphs   # gives the paper's 5.86 / 11.32 / 22.39
 ```
+
+## Results
+
+All 8 Replica scenes at stride 10. SAM 3 is prompted with the `indoor` list, not the scenes' class names. The GT rows
+use Replica's object masks instead of SAM 3's, as an upper bound. The maps compared:
+
+- **SAM's tracks**: each SAM 3 track is an object, with no memory or refine (`evaluate_openlex3d.py --variants
+  tracks`; `run.py` always scores them).
+- **memory**: the object memory before refine (`evaluate_openlex3d.py --variants memory`).
+- **graph**: the full graph.
+- **GT tracks**: each GT object, a perfect map.
+
+Caveats: the parameters were tuned on these same scenes. The VGGT-Omega maps are moved into Replica's frame by the
+GT camera path (ATE 2.4 cm), and that is used for scoring only.
+
+**OpenLex3D queries**, all queries, AP in percent. Objects is the total over the 8 scenes:
+
+| Masks | Poses | Map | Objects | mAP | AP50 | AP25 |
+|---|---|---|---|---|---|---|
+| ConceptGraphs (paper) | | | | 5.86 | 11.32 | 22.39 |
+| HOV-SG (paper) | | | | 5.76 | 11.67 | 25.30 |
+| OpenMask3D (paper) | | | | 11.47 | 17.01 | 24.02 |
+| Kassab2024 (paper) | | | | 1.38 | 2.87 | 7.54 |
+| SAM 3 | VGGT-Omega | SAM's tracks | 951 | 8.34 | 15.77 | 31.24 |
+| SAM 3 | VGGT-Omega | memory | 980 | 9.45 | 18.38 | 35.74 |
+| SAM 3 | VGGT-Omega | graph | 431 | 9.16 | 17.04 | 34.66 |
+| SAM 3 | Replica | graph | 453 | 10.35 | 20.19 | 38.04 |
+| GT | VGGT-Omega | GT tracks | 488 | 16.49 | 32.32 | 43.99 |
+| GT | VGGT-Omega | graph | 424 | 15.83 | 29.06 | 40.12 |
+| GT | Replica | GT tracks | 488 | 19.05 | 37.26 | 48.28 |
+| GT | Replica | graph | 464 | 18.72 | 34.40 | 45.77 |
+
+- **SAM's tracks already beat ConceptGraphs** (8.34 against 5.86 mAP). The memory adds 1.1 and refine takes 0.3 back.
+  So most of the gain comes from the newer models (SAM 3 and SigLIP 2, where ConceptGraphs uses SAM and CLIP), not
+  from the graph.
+- **Masks are the largest gap.** GT masks raise the graph from 9.16 to 15.83 with the same poses. Replica's poses add
+  1.2 to 2.9.
+- **With perfect masks the graph costs little:** 0.3 to 0.7 below the GT tracks.
+
+**OpenLex3D segmentation, top 5**, as shares of the GT objects' points (SAM 3 with VGGT-Omega poses, unless the row
+says GT):
+
+| Map | Synonym | Wrong | Clutter | Missing |
+|---|---|---|---|---|
+| ConceptGraphs | 0.408 | 0.214 | 0.237 | 0.017 |
+| SAM's tracks | 0.558 | 0.134 | 0.105 | 0.134 |
+| memory | 0.585 | 0.118 | 0.114 | 0.119 |
+| graph | 0.510 | 0.072 | 0.099 | 0.264 |
+| GT tracks, Replica poses | 0.644 | 0.140 | 0.111 | 0.020 |
+| graph on GT masks, Replica poses | 0.575 | 0.135 | 0.109 | 0.100 |
+
+Refine trades coverage for precision: it halves the objects and cuts wrong labels from 0.118 to 0.072, but raises
+missing from 0.119 to 0.264. Walls, floors and ceilings are not scored, and missing is averaged per object, so every
+small object refine drops counts in full. Even with GT masks it drops 6 to 9 real objects per scene: ceiling lights,
+wall plugs, vents and signs.
+
+**`run.py`**, mean over the scenes (IDs is per scene):
+
+| Masks | Poses | Map | IDF1 | IDs | kept% | L0 mAP | L1 mAP | reach | nearest, oracle |
+|---|---|---|---|---|---|---|---|---|---|
+| SAM 3 | VGGT-Omega | SAM's tracks | 0.47 | 119 | 0.49 | 0.54 | 0.70 | 0.82 | 0.41 |
+| SAM 3 | VGGT-Omega | graph | 0.66 | 54 | 0.90 | 0.53 | 0.76 | 0.69 | 0.50 |
+| SAM 3 | Replica | graph | 0.67 | 57 | 0.93 | 0.55 | 0.70 | 0.72 | 0.57 |
+| GT | VGGT-Omega | GT tracks | 1.00 | 62 | 1.00 | 0.70 | 0.78 | 1.00 | 0.89 |
+| GT | VGGT-Omega | graph | 0.96 | 53 | 0.99 | 0.63 | 0.77 | 0.86 | 0.69 |
+| GT | Replica | GT tracks | 1.00 | 62 | 1.00 | 0.70 | 0.78 | 1.00 | 0.95 |
+| GT | Replica | graph | 0.98 | 58 | 0.99 | 0.65 | 0.78 | 0.92 | 0.83 |
+
+What the graph adds is identity over time, which OpenLex3D doesn't score: IDF1 goes from 0.47 to 0.66, and the share
+of objects that keep their node when they come back into view goes from 0.49 to 0.90.
