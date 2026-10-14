@@ -93,9 +93,9 @@ def image_path(run: Run, i: int):
 
 
 def load_rgb(run: Run, i: int) -> np.ndarray:
-    """Frame i as RGB (H, W, 3) uint8."""
+    """Frame i as RGB (H, W, 3) uint8, writable: torch warns about read-only arrays (Depth Pro's processor in vggt)."""
     with Image.open(image_path(run, i)) as image:
-        return np.asarray(image.convert("RGB"))
+        return np.array(image.convert("RGB"))
 
 
 def load_run_rgb(run: Run) -> tuple[list[np.ndarray], list[int]]:

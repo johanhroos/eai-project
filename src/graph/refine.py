@@ -33,8 +33,7 @@ objects rather than more, and only those whose box can be trusted:
              and far. The others' masks get node -1.
 
 refine returns the node of every mask after all of this, the nodes' labels, and what each step did, for the graph
-stage's refine.json. What the steps change on Replica and on phone video is measured in the README (the graph stage,
-step 7).
+stage's refine.json.
 """
 
 import warnings

@@ -2,6 +2,8 @@
 
   compute_events    when each object is hidden (leaves the view) and revisited (comes back)
   compute_gt_boxes  one fused 3D box per object, to score the predicted boxes against
+  replica_frame     the transform from a run's world frame to Replica's, which VGGT-Omega's poses need
+  boxes_in_run      the GT boxes in a run's world frame, to draw them over its map
 
 Replica objects never move, so "hidden" means "not visible", either out of the field of view or occluded.
 """
@@ -12,7 +14,7 @@ from itertools import pairwise
 import numpy as np
 
 from data import replica
-from data.stages import Events, ObjectBoxes, Run, rle_area
+from data.stages import Events, Geometry, ObjectBoxes, Run, load_stage, rle_area
 from geometry.depth import backproject, geometry_source, robust_filter
 
 # Thresholds in raw frames, so they do not change with the run's stride
@@ -117,3 +119,41 @@ def compute_gt_boxes(run: Run, sample_per_frame=2000, seed=0) -> ObjectBoxes:
         box_max=np.array([r[2] for r in rows], np.float32).reshape(-1, 3),
         n_points=np.array([r[3] for r in rows], np.int32),
     )
+
+
+def replica_frame(run: Run) -> tuple[np.ndarray, float]:
+    """(4, 4) Sim(3) [s R | t] from the run's world frame to Replica's, and the camera error (ATE, m) after it.
+
+    The identity with Replica's poses. With VGGT-Omega's, the Sim(3) that best maps its camera centres onto the GT ones
+    (Umeyama), which uses the ground truth: for scoring and drawing only.
+    """
+    if run.pose_source == "gt":
+        return np.eye(4), 0.0
+    from models.vggt import umeyama, world_from_camera
+
+    geometry = load_stage(run.stage_dir("vggt"), Geometry)
+    ours = np.array([world_from_camera(geometry, k)[:3, 3] for k in range(len(geometry.frame))])
+    scene, seq = replica.parse_source(run.source)
+    gt = replica.load_poses(scene, seq)[geometry.frame, :3, 3]
+    fit = umeyama(ours, gt)
+    ate = float(np.sqrt(((ours @ fit[:3, :3].T + fit[:3, 3] - gt) ** 2).sum(1).mean()))
+    return fit, ate
+
+
+def boxes_in_run(run: Run) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
+    """The GT boxes (gt_boxes stage) of the objects other than walls, floors and ceilings, in the run's world frame.
+
+    Returns (M, 3) centres, (M, 3) half sizes, the (3, 3) rotation of every box (Replica's axes in the run's frame: the
+    identity with Replica's poses) and the objects' classes. With VGGT-Omega's poses the boxes turn with the frame, so
+    they are no longer axis-aligned there.
+    """
+    boxes = load_stage(run.stage_dir("gt_boxes"), ObjectBoxes)
+    objects = replica.load_objects(replica.parse_source(run.source)[0])
+    keep = [k for k, o in enumerate(boxes.object_id.tolist()) if objects[o].class_name not in replica.IGNORE_CLASSES]
+    fit, _ = replica_frame(run)
+    scale = float(np.linalg.norm(fit[:3, 0]))
+    rotation = fit[:3, :3] / scale
+    centre = (boxes.box_min[keep] + boxes.box_max[keep]) / 2
+    centre = (centre - fit[:3, 3]) @ rotation / scale  # rotation.T @ (x - t) / s, row by row
+    half = (boxes.box_max[keep] - boxes.box_min[keep]) / 2 / scale
+    return centre, half, rotation.T, [objects[int(boxes.object_id[k])].class_name for k in keep]

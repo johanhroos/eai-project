@@ -11,8 +11,7 @@ joins that node. DINO appearance and 3D location decide the rest:
          camera pose is off, and nothing is cut by these cues. With CUT_AFTER above 1, a track is cut only where it
          jumps by the gap or DINO in that many reliable masks in a row, and until then a mask that jumped stays with
          the node as a member only, like an unreliable mask. A node takes one mask per frame: of two masks whose tracks
-         lead to it, the one that matches it less is cut. Why the constants have the values they have is measured in
-         the README (the graph stage, step 3).
+         lead to it, the one that matches it less is cut.
   match  a new track, or the rest of a cut one, joins the node in memory it matches, or becomes a new node
   merge  a node that gets a reliable view joins an older node it matches, unless the two were ever seen in one frame:
          an object back in view under a new SAM ID, or one first seen too far away to match
