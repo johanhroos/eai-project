@@ -2,14 +2,18 @@
 
 from dataclasses import replace
 from functools import cache
+from types import SimpleNamespace
 
 import numpy as np
 import torch
 from transformers import Sam3VideoModel, Sam3VideoProcessor
+from transformers.models.sam3_video.modeling_sam3_video import nms_masks
 
 from data.stages import Masks, encode_rle
 
 MODEL_ID = "facebook/sam3"
+STATE_DEVICE = "cuda"  # where the tracker keeps its state; "cpu" for a GPU too small for it (see segment)
+DETECT_BATCH = 16  # prompts the detector runs on at once (batched_detection); 1 runs them one by one as SAM 3 does
 
 
 @cache
@@ -20,11 +24,70 @@ def load_model() -> tuple[Sam3VideoProcessor, Sam3VideoModel]:
     model._tracker_update_memories = offload_memories(model._tracker_update_memories, model.tracker_model)
     tracker = model.tracker_model
     tracker._batch_encode_memories = offload_memories(tracker._batch_encode_memories, tracker)
+    model.run_detection = batched_detection(model)
     return processor, model
 
 
+def batched_detection(model: Sam3VideoModel):
+    """SAM 3's run_detection, with the detector run on DETECT_BATCH prompts at a time instead of one by one.
+
+    In every frame, transformers 5.17 runs the image encoder once and then the detector once for each prompt, which
+    with 102 prompts is most of SAM 3's time. Every prompt is padded to the same 32 tokens, so a chunk of prompts is
+    one batch against the frame's image features, and each prompt's detections are kept as run_detection keeps them.
+    """
+    original = model.run_detection
+
+    def run_detection(inference_session, vision_embeds):
+        if DETECT_BATCH <= 1:
+            return original(inference_session=inference_session, vision_embeds=vision_embeds)
+        detector = model.detector_model
+        prompt_ids = list(inference_session.prompts.keys())
+        for prompt_id in prompt_ids:
+            if prompt_id not in inference_session.prompt_embeddings:
+                inference_session.prompt_embeddings[prompt_id] = detector.get_text_features(
+                    input_ids=inference_session.prompt_input_ids[prompt_id],
+                    attention_mask=inference_session.prompt_attention_masks[prompt_id],
+                    return_dict=True,
+                )
+        detections = {}
+        for start in range(0, len(prompt_ids), DETECT_BATCH):
+            chunk = prompt_ids[start : start + DETECT_BATCH]
+            n = len(chunk)
+            # The detector reads only pooler_output, which get_text_features sets on its output
+            text = SimpleNamespace(
+                pooler_output=torch.cat([inference_session.prompt_embeddings[p].pooler_output for p in chunk])
+            )
+            vision = type(vision_embeds)(
+                fpn_hidden_states=tuple(x.expand(n, *x.shape[1:]) for x in vision_embeds.fpn_hidden_states),
+                fpn_position_encoding=tuple(x.expand(n, *x.shape[1:]) for x in vision_embeds.fpn_position_encoding),
+            )
+            attention = torch.cat([inference_session.prompt_attention_masks[p] for p in chunk])
+            out = detector(vision_embeds=vision, text_embeds=text, attention_mask=attention)
+            probs = out.pred_logits.sigmoid() * out.presence_logits.sigmoid()
+            for k, prompt_id in enumerate(chunk):
+                pred_probs = probs[k : k + 1]
+                if model.det_nms_thresh > 0.0:
+                    keep = nms_masks(
+                        pred_probs=pred_probs[0],
+                        pred_masks=out.pred_masks[k],
+                        prob_threshold=model.score_threshold_detection,
+                        iou_threshold=model.det_nms_thresh,
+                    )
+                    pred_probs = pred_probs.clone()
+                    pred_probs[0][~keep] = 0.0
+                pos = torch.where(pred_probs > model.score_threshold_detection)
+                detections[prompt_id] = {
+                    "bbox": out.pred_boxes[k : k + 1][pos[0], pos[1]],
+                    "mask": out.pred_masks[k : k + 1][pos[0], pos[1]],
+                    "scores": pred_probs[pos[0], pos[1]],
+                }
+        return detections
+
+    return run_detection
+
+
 def offload_memories(encode, tracker):
-    """Wrap one of SAM 3's two memory encoders so the memories it stores go to the CPU, and old ones are dropped.
+    """Wrap one of SAM 3's two memory encoders so the memories it stores go to the state's device, and old ones go.
 
     transformers 5.17 moves the tracker's outputs to inference_state_device but stores the encoded memories, about
     1.3 MB per object and frame, where they were computed. On the GPU they took 13.7 GB by frame 139 of IMG_0649 with
@@ -81,9 +144,9 @@ def segment(
 
     frames are RGB (H, W, 3) uint8 in temporal order, and Masks.frame holds frame_numbers[i] for frames[i].
     Masks.prompt indexes prompts. SAM 3 keeps the masks of one prompt apart, but masks of different prompts can overlap.
-    The whole clip and the tracker state stay in CPU memory during tracking, memories included (offload_memories). The
-    tracker keeps every frame's masks and features for every object, so on the GPU it outgrew 32 GB at 100 frames; on
-    the CPU it costs about 40% speed.
+    The whole clip stays in CPU memory, and the tracker's state on STATE_DEVICE. Without forget, the tracker kept every
+    frame's masks and features for every object and outgrew 32 GB of GPU at 100 frames; with it, the state is the last
+    few frames of every object found, and keeping it on the CPU instead cost about 40% of the speed.
     """
     if len(frames) != len(frame_numbers):
         raise ValueError(f"got {len(frames)} frames but {len(frame_numbers)} frame numbers")
@@ -93,7 +156,7 @@ def segment(
     inference_session = processor.init_video_session(
         video=frames,
         inference_device="cuda",
-        inference_state_device="cpu",
+        inference_state_device=STATE_DEVICE,
         processing_device="cpu",
         video_storage_device="cpu",
         dtype=torch.bfloat16,

@@ -14,9 +14,6 @@ the mask in at least SUPPORT of the views where it is in the image and not hidde
 the mask in the views from other directions. The box is around the kept points without the outer TRIM percent on each
 axis.
 
-How much closer these boxes come to the GT objects' than other ways of drawing them is measured in the README (the
-graph stage, step 8).
-
 The graph stage keeps these boxes (Graph.box_min and box_max), and graph.nodes.build_nodes uses them. The object
 memory can't: it only knows the frames so far, and boxes around the pooled points (graph.nodes.node_box) are what it
 matches with.

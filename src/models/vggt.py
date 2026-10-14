@@ -17,7 +17,7 @@ phone video. One similarity transform per run, Geometry.sim3, puts the reconstru
 
 On Replica, gt_errors scores this against the GT trajectory. The checkpoints are gated: request access to
 facebook/VGGT-Omega on Hugging Face (FAIR Noncommercial Research License). Depth Pro is under Apple's ML Research
-license. 100 frames take about 13 GB of GPU memory and 10 s, 286 frames 28 GB and 51 s.
+license. 100 frames take about 13 GB of GPU memory and 10 s, 300 frames 27 GiB and 44 s.
 """
 
 from functools import cache
@@ -45,7 +45,7 @@ MIN_TURN = 0.2  # below this ratio of the x axes' second to first singular value
 WALL_FRAMES = 20  # frames whose depth normals find the walls
 VERTICAL = 0.2  # a surface is vertical when its normal's z is below this
 WALL_STRENGTH = 0.3  # 0 to 1: how much the vertical normals agree on four directions 90 degrees apart
-MAX_FRAMES = 250  # 286 frames peaked at 27.9 GB of the RTX 5090's 32, after one failed allocation
+MAX_FRAMES = 300  # peak 27.0 GiB of the RTX 5090's 31.4 (250: 23.2, 340: 30.1, 380 ran out), about 76 MB a frame
 PARAMS = {
     "checkpoint": CHECKPOINT,
     "resolution": RESOLUTION,

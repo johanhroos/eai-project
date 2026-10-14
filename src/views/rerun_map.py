@@ -28,6 +28,7 @@ from scipy.ndimage import maximum_filter, minimum_filter
 
 from data import footage, replica
 from data.stages import Run, bounding_boxes
+from evaluation import ground_truth
 from geometry.depth import backproject, geometry_source
 from graph.edges import build_edges
 from graph.nodes import colours, load_nodes
@@ -38,6 +39,7 @@ VOXEL = 0.02  # metres: one point per cube of this size
 EDGE_JUMP = 0.05  # drop a pixel when the depth in its 3 x 3 neighbourhood spans more than this share of its depth
 IMAGE_SIDE = 640  # long side of the frames shown at the camera
 PATH_COLOURS = [(255, 80, 80), (80, 200, 255), (255, 220, 60), (120, 255, 120)]  # camera path of each video
+GT_COLOUR = (230, 230, 230)  # Replica's GT boxes (log_gt_boxes)
 
 
 def point_cloud(run: Run) -> tuple[np.ndarray, np.ndarray]:
@@ -164,6 +166,31 @@ def log_map(run: Run) -> None:
         )
 
 
+def log_gt_boxes(run: Run) -> None:
+    """Log a Replica run's GT boxes (ground_truth.boxes_in_run) under world/gt, to compare with the map's boxes.
+
+    They are light grey, with the class on hover; hide them in the viewer's entity tree. With VGGT-Omega's poses they
+    are moved into the map's frame by the camera path's best fit, so they are only as well placed as that fit.
+    """
+    from scipy.spatial.transform import Rotation
+
+    centre, half, rotation, names = ground_truth.boxes_in_run(run)
+    turn = rr.Quaternion(xyzw=Rotation.from_matrix(rotation).as_quat())
+    rr.log(
+        "world/gt",
+        rr.Boxes3D(
+            centers=centre,
+            half_sizes=half,
+            quaternions=[turn] * len(centre),
+            colors=GT_COLOUR,
+            radii=0.004,
+            labels=[f"GT {name}" for name in names],
+            show_labels=False,
+        ),
+        static=True,
+    )
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -171,6 +198,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Save a run's map as a Rerun recording, eval/map.rrd.")
     cli.add_run_arguments(parser, source=None)
+    parser.add_argument("--gt", action="store_true", help="also log the GT boxes (Replica only)")
     args = parser.parse_args()
     run = cli.runs(parser, args)[0]
     out = run.stage_dir("eval") / "map.rrd"
@@ -178,4 +206,6 @@ if __name__ == "__main__":
     rr.init("map_" + run.source.replace("/", "_"))
     rr.save(out)
     log_map(run)
+    if args.gt:
+        log_gt_boxes(run)
     print(f"Saved {out}")

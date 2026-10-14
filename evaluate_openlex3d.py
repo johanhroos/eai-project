@@ -62,6 +62,7 @@ import numpy as np
 from data import footage, replica, vocab
 from data.paths import DATA_DIR, OUTPUT_DIR
 from data.stages import Boxes, Graph, Masks, Run, TextAligned, load_stage
+from evaluation import ground_truth
 
 PREDICTIONS = OUTPUT_DIR / "openlex3d" / "predictions"  # PREDICTIONS/<method>/replica/<scene>, as OpenLex3D expects
 RESULTS = OUTPUT_DIR / "openlex3d" / "results"
@@ -122,26 +123,6 @@ def object_ids(run: Run, variant: str, masks: Masks) -> np.ndarray:
     raise ValueError(f"unknown variant {variant!r}")
 
 
-def to_replica_frame(run: Run) -> tuple[np.ndarray, float]:
-    """(4, 4) Sim(3) from the run's world frame to Replica's mesh frame, and the camera error (ATE, m) after it.
-
-    The identity with Replica's poses, which are in the mesh frame. With VGGT-Omega's, the Sim(3) that best maps the
-    camera centres onto the GT ones (Umeyama).
-    """
-    if run.pose_source == "gt":
-        return np.eye(4), 0.0
-    from data.stages import Geometry
-    from models.vggt import umeyama, world_from_camera
-
-    geometry = load_stage(run.stage_dir("vggt"), Geometry)
-    ours = np.array([world_from_camera(geometry, k)[:3, 3] for k in range(len(geometry.frame))])
-    scene, seq = replica.parse_source(run.source)
-    gt = replica.load_poses(scene, seq)[geometry.frame, :3, 3]
-    fit = umeyama(ours, gt)
-    ate = float(np.sqrt(((ours @ fit[:3, :3].T + fit[:3, 3] - gt) ** 2).sum(1).mean()))
-    return fit, ate
-
-
 def inside_boxes(kept: dict[int, np.ndarray], graph: Graph | None = None) -> dict[int, np.ndarray]:
     """Each node's points (graph.multiview.object_points) inside its box, so that a node is its box with its points.
 
@@ -182,7 +163,7 @@ def prediction(run: Run, variant: str) -> tuple[np.ndarray, np.ndarray, np.ndarr
     index = np.concatenate([np.full(len(kept[n]), k) for k, n in enumerate(with_points)] + [np.zeros(0)]).astype(
         np.int64
     )
-    fit, ate = to_replica_frame(run)
+    fit, ate = ground_truth.replica_frame(run)
     points = (points @ fit[:3, :3].T + fit[:3, 3]).astype(np.float32)
     embeddings = object_emb[[row[n] for n in with_points]].astype(np.float32)
     graph_metadata = run.stage_dir("graph") / "metadata.json"

@@ -3,10 +3,12 @@
 Each node is drawn as its box seen from above, in the colour views/video.py gives it and labelled with its label and
 ID. "on" edges are arrows from the node on top to the one under it, "near" edges thin dashed lines between the box
 centres. Nodes without edges (walls, floors, ceilings and nodes with a box side over edges.MAX_SIDE) are left out, as
-in rerun_map. highlight draws chosen nodes thicker and dims the rest, such as the answer of a --near query.
+in rerun_map. highlight draws chosen nodes thicker and dims the rest, such as the answer of a --near query. On Replica,
+gt=True also draws the GT objects' boxes (ground_truth.boxes_in_run) as dashed outlines, to compare the boxes with.
 
 In a notebook:      top_down.plot(run)
                     top_down.plot(run, highlight=[37, 82])
+                    top_down.plot(run, gt=True)
 From the shell:     uv run --no-sync python -m views.top_down --source replica/room_0/00   (saves eval/edges.png)
 """
 
@@ -15,6 +17,7 @@ import numpy as np
 from matplotlib import patches, patheffects
 
 from data.stages import Run
+from evaluation import ground_truth
 from graph.edges import MAX_SIDE, STRUCTURE, build_edges
 from graph.nodes import colours, load_nodes
 from views import rerun_map
@@ -22,7 +25,7 @@ from views import rerun_map
 MARGIN = 0.5  # metres of room shown around the objects
 
 
-def plot(run: Run, highlight: list[int] | None = None, near: bool = True) -> plt.Figure:
+def plot(run: Run, highlight: list[int] | None = None, near: bool = True, gt: bool = False) -> plt.Figure:
     """The view from above of the run's nodes and edges (see the module docstring). near=False leaves out "near"."""
     masks, graph, nodes = load_nodes(run)
     edges = build_edges(nodes)
@@ -78,6 +81,13 @@ def plot(run: Run, highlight: list[int] | None = None, near: bool = True) -> plt
         )  # fmt: skip
         text.set_path_effects([patheffects.withStroke(linewidth=2.5, foreground="white")])
 
+    if gt:
+        centre, half, rotation, _ = ground_truth.boxes_in_run(run)
+        square = np.array([[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1]])  # the bottom face, in order
+        for c, h in zip(centre, half, strict=True):
+            footprint = (c + (square * h) @ rotation.T)[:, :2]
+            ax.add_patch(patches.Polygon(footprint, closed=True, fill=False, ls="--", lw=0.9, ec="0.15", zorder=3))
+
     ax.set_xlim(lo[0], hi[0])
     ax.set_ylim(lo[1], hi[1])
     ax.set_aspect("equal")
@@ -104,10 +114,11 @@ if __name__ == "__main__":
     cli.add_run_arguments(parser, source=None)
     parser.add_argument("--highlight", type=int, nargs="*", help="node IDs to draw thicker")
     parser.add_argument("--no-near", action="store_true", help="leave out the 'near' edges")
+    parser.add_argument("--gt", action="store_true", help="also draw the GT boxes (Replica only)")
     args = parser.parse_args()
     run = cli.runs(parser, args)[0]
     plt.switch_backend("Agg")  # no display here
     out = run.stage_dir("eval") / "edges.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    plot(run, args.highlight, near=not args.no_near).savefig(out, dpi=110)
+    plot(run, args.highlight, near=not args.no_near, gt=args.gt).savefig(out, dpi=110)
     print(f"Saved {out}")
