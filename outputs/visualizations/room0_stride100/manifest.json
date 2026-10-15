@@ -1,0 +1,133 @@
+{
+  "source": "replica/room_0/00",
+  "stride": 100,
+  "mask_source": "sam3",
+  "pose_source": "gt",
+  "model": "facebook/sam3",
+  "n_masks": 765,
+  "frames": [
+    {
+      "frame": 0,
+      "masks": 30,
+      "valid_3d_boxes": 30,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 100,
+      "masks": 29,
+      "valid_3d_boxes": 29,
+      "displayed_points": 50997
+    },
+    {
+      "frame": 200,
+      "masks": 33,
+      "valid_3d_boxes": 32,
+      "displayed_points": 50998
+    },
+    {
+      "frame": 300,
+      "masks": 38,
+      "valid_3d_boxes": 38,
+      "displayed_points": 50997
+    },
+    {
+      "frame": 400,
+      "masks": 31,
+      "valid_3d_boxes": 30,
+      "displayed_points": 50996
+    },
+    {
+      "frame": 500,
+      "masks": 27,
+      "valid_3d_boxes": 27,
+      "displayed_points": 50998
+    },
+    {
+      "frame": 600,
+      "masks": 21,
+      "valid_3d_boxes": 21,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 700,
+      "masks": 28,
+      "valid_3d_boxes": 28,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 800,
+      "masks": 38,
+      "valid_3d_boxes": 37,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 900,
+      "masks": 41,
+      "valid_3d_boxes": 40,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 1000,
+      "masks": 46,
+      "valid_3d_boxes": 45,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 1100,
+      "masks": 47,
+      "valid_3d_boxes": 46,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 1200,
+      "masks": 46,
+      "valid_3d_boxes": 44,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 1300,
+      "masks": 30,
+      "valid_3d_boxes": 27,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 1400,
+      "masks": 48,
+      "valid_3d_boxes": 44,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 1500,
+      "masks": 35,
+      "valid_3d_boxes": 32,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 1600,
+      "masks": 55,
+      "valid_3d_boxes": 54,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 1700,
+      "masks": 55,
+      "valid_3d_boxes": 52,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 1800,
+      "masks": 51,
+      "valid_3d_boxes": 51,
+      "displayed_points": 51000
+    },
+    {
+      "frame": 1900,
+      "masks": 36,
+      "valid_3d_boxes": 32,
+      "displayed_points": 51000
+    }
+  ],
+  "point_subsampling": 16,
+  "preview": "preview.png",
+  "recording": "room0_stride100.rrd"
+}

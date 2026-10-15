@@ -1,0 +1,10 @@
+{
+  "min_pixels": 500,
+  "min_run": 50,
+  "min_gap": 60,
+  "kinds": {
+    "hidden": 0,
+    "revisited": 1
+  },
+  "n_rows": 0
+}
