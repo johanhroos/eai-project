@@ -185,7 +185,7 @@ def nearest_objects(
     gt_boxes: ObjectBoxes,
     objects: dict,
 ) -> dict:
-    """How often the map finds the nearest object of a type (graph.query --near), against the GT boxes.
+    """How often the map finds the nearest object of a type (graph.query --nearest), against the GT boxes.
 
     Every GT object A that is seen in the run (ground_truth.MIN_PIXELS) asks for the nearest object of every class C
     that has at least two other seen objects, so that it matters which one comes first. The answer is the C object
@@ -194,7 +194,7 @@ def nearest_objects(
     (graph.nodes). The query is right when the first candidate stands for the answer. A query whose A no node stands for
     is wrong. Nodes that stand for A itself are never candidates: a duplicate of the anchor isn't another object.
 
-      labels  the candidates are the nodes labelled C, as for graph.query --near
+      labels  the candidates are the nodes labelled C, as for graph.query --nearest
       oracle  the candidates are the nodes that stand for an object of class C: only the map's boxes and identities
       anchor  share of the queries whose A some node stands for
       reach   share of the queries whose A and answer some node stands for: what oracle gets with perfect boxes

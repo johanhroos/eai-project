@@ -1,4 +1,4 @@
-"""Edges between object nodes and the nearest-object query: the graph's spatial relations, from the nodes' 3D boxes.
+"""Edges between object nodes, from their 3D boxes, the queries over them and the nearest-object query.
 
   on    node a rests on or in node b: most of a's footprint lies over b's, a's bottom is above b's bottom, at most
         ON_GAP above b's top and at most ON_DEPTH below it, and a is the smaller one. A cushion's box lies inside the
@@ -68,17 +68,24 @@ def rests_on(lo: np.ndarray, hi: np.ndarray) -> np.ndarray:
     return on
 
 
+def gets_edges(nodes: list[Node]) -> np.ndarray:
+    """(M,) bool, whether each node can have edges: not with a STRUCTURE label, no box or a box side over MAX_SIDE."""
+    lo, hi = box_corners(nodes)
+    structure = np.array([n.label in STRUCTURE for n in nodes], bool)
+    return ~structure & np.isfinite(lo).all(1) & ((hi - lo).max(1) <= MAX_SIDE)
+
+
 def build_edges(nodes: list[Node]) -> list[Edge]:
     """The edges between the nodes, from build_nodes.
 
-    Nodes without a box, with a STRUCTURE label or with a box side over MAX_SIDE get none.
+    Nodes without a box, with a STRUCTURE label or with a box side over MAX_SIDE get none (gets_edges).
     """
     if not nodes:
         return []
     lo, hi = box_corners(nodes)
     gap = box_gap(lo, hi)
     on = rests_on(lo, hi)
-    keep = np.array([n.label not in STRUCTURE for n in nodes]) & np.isfinite(lo).all(1) & ((hi - lo).max(1) <= MAX_SIDE)
+    keep = gets_edges(nodes)
     edges = []
     for i, j in zip(*np.triu_indices(len(nodes), 1), strict=True):
         if not (keep[i] and keep[j]) or not (on[i, j] or on[j, i] or gap[i, j] <= NEAR):
@@ -101,6 +108,23 @@ def neighbours(edges: list[Edge], node: int) -> list[tuple[str, int]]:
         elif e.b == node:
             out.append(("under" if e.relation == "on" else "near", e.a))
     return out
+
+
+def related(edges: list[Edge], anchors: list[int], relation: str) -> list[tuple[int, str, int, float]]:
+    """The nodes with an edge to one of the anchor node IDs, as (ID, relation seen from it, anchor ID, box gap).
+
+    relation "on" keeps the nodes that rest on an anchor. "near" keeps every edge, "on" and "under" too: a cushion on a
+    sofa has an "on" edge to it and no "near" one, but it is near it. A node with edges to several anchors appears
+    once, for the closest. The anchors themselves can appear, when two of them have an edge. Closest first.
+    """
+    best = {}
+    for e in edges:
+        for node, anchor, rel in ((e.a, e.b, e.relation), (e.b, e.a, "under" if e.relation == "on" else "near")):
+            if anchor not in anchors or (relation == "on" and rel != "on"):
+                continue
+            if node not in best or e.gap < best[node][3]:
+                best[node] = (node, rel, anchor, e.gap)
+    return sorted(best.values(), key=lambda r: (r[3], r[0]))
 
 
 def nearest(nodes: list[Node], anchor: int, candidates: list[int]) -> list[tuple[int, float, float]]:

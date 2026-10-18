@@ -109,11 +109,12 @@ stride 20, half of it VGGT-Omega's depth.
 After a run, these read its cached stages (with the same arguments):
 
 ```bash
-uv run --no-sync python -m graph.query --source replica/room_0/00 "striped pillow"      # search by text
-uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --near sofa   # nearest of a type
-uv run --no-sync python -m graph.edges --source replica/room_0/00                       # list the edges
-uv run --no-sync python -m views.top_down --source replica/room_0/00 --gt               # eval/edges.png
-uv run --no-sync python -m views.rerun_map --source replica/room_0/00 --gt              # eval/map.rrd
+uv run --no-sync python -m graph.query --source replica/room_0/00 "striped pillow"         # search by text
+uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --nearest sofa   # nearest of a type
+uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --on sofa       # by edge: on, or --near
+uv run --no-sync python -m graph.edges --source replica/room_0/00                         # list the edges
+uv run --no-sync python -m views.top_down --source replica/room_0/00 --gt                 # eval/edges.png
+uv run --no-sync python -m views.rerun_map --source replica/room_0/00 --gt                # eval/map.rrd
 uv run --no-sync python -m views.video --source replica/room_0/00 --panels tracks graph gt
 ```
 

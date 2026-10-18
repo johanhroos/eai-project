@@ -5,9 +5,16 @@ Run it to search a run's graph, after run.py has cached the stages:
     uv run --no-sync python -m graph.query --source replica/room_0/00 "striped pillow"
     uv run --no-sync python -m graph.query --source phone/kitchen "coffee mug"
 
---near ranks the matches by distance instead, to the object that best matches another text (graph/edges.py):
+--nearest ranks the matches by distance instead, to the object that best matches another text (graph/edges.py):
 
-    uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --near "grey sofa"
+    uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --nearest "grey sofa"
+
+--near and --on search the graph's edges instead (graph/edges.py): the objects that stand near, or rest on, an object of
+another text, which must be one of the labels. Unlike --nearest, the answer can be empty. Without a text, they list
+every such object:
+
+    uv run --no-sync python -m graph.query --source replica/room_0/00 cushion --on sofa
+    uv run --no-sync python -m graph.query --source replica/room_0/00 --near table
 
 --position lists the objects nearest to a point in the world frame, with no text encoder:
 
@@ -34,7 +41,7 @@ def object_embeddings(masks: Masks, emb: TextAligned, ids: np.ndarray) -> tuple[
 
 
 def of_type(labels: list[str], text: str, scores: np.ndarray, top: int) -> np.ndarray:
-    """Rows of the objects that are a text, for --near: the objects labelled with it when it is one of the labels.
+    """Rows of the objects that are a text, for --nearest: the objects labelled with it when it is one of the labels.
 
     Otherwise the top best matches by SigLIP. Labels come first because SigLIP's scores for a type are close: on room_0,
     "lamp" scores 0.116 for the lamp and 0.112 for blinds. labels and scores (M,) are per object row.
@@ -66,15 +73,26 @@ if __name__ == "__main__":
     parser.add_argument("text", nargs="*", help="what to look for, such as: striped pillow")
     cli.add_run_arguments(parser)
     parser.add_argument("--top", type=int, default=5)
-    parser.add_argument(
-        "--near",
+    relation = parser.add_mutually_exclusive_group()
+    relation.add_argument(
+        "--nearest",
         help="rank the matches by distance to the object that best matches this text, such as: sofa. The matches are "
         "then the objects labelled with the text when it is one of SAM's prompts, else its --top best matches",
     )
+    relation.add_argument(
+        "--near",
+        help="the objects with an edge (near, on or under) to an object of this text, such as: sofa. The anchors are "
+        "the objects labelled with it, so it must be one of SAM's prompts. Can be empty",
+    )
+    relation.add_argument(
+        "--on", help="the objects resting on an object of this text, anchored as --near; can be empty"
+    )
     parser.add_argument("--position", nargs=3, type=float, help="list the objects nearest to this world point x y z")
     args = parser.parse_args()
-    if not args.text and args.position is None:
-        parser.error("give a text to look for, or --position x y z")
+    if not args.text and args.position is None and args.near is None and args.on is None:
+        parser.error("give a text to look for, --near or --on with a text, or --position x y z")
+    if not args.text and args.nearest is not None:
+        parser.error("--nearest needs a text to look for")
 
     run = cli.runs(parser, args)[0]
     masks, graph, nodes = load_nodes(run)
@@ -98,20 +116,53 @@ if __name__ == "__main__":
         print(f"{run.source}: nearest to ({', '.join(f'{c:g}' for c in point)})")
         for i in [i for i in np.argsort(gap, kind="stable") if np.isfinite(gap[i])][: args.top]:
             print(f"  {gap[i]:.2f} m  {describe(nodes[i])}")
-    if not args.text:
+    if not args.text and args.near is None and args.on is None:
         raise SystemExit
     objects, object_emb = object_embeddings(masks, load_stage(run.stage_dir("siglip"), TextAligned), graph.node)
+    labels = [nodes[int(o)].label for o in objects]
     text = " ".join(args.text)
-    queries = [text] if args.near is None else [text, args.near]
+    other = args.nearest if args.nearest is not None else args.near if args.near is not None else args.on
+    # --near and --on anchor on the objects labelled with the text: a SigLIP best match would always find one, even
+    # for a text that names nothing in the scene
+    if args.nearest is None and other is not None and other.strip().lower() not in labels:
+        subject = f'"{text}"' if text else "objects"
+        print(f'{run.source}: {subject} {"near" if args.near is not None else "on"} "{other}"')
+        print(f'  none: no object labelled "{other}"; the labels are: {", ".join(sorted(set(labels)))}')
+        raise SystemExit
+    queries = ([text] if text else []) + ([other] if other is not None else [])
     sims = siglip.load_encoder().encode_text(queries).cpu().numpy() @ object_emb.T  # (Q, M)
 
-    if args.near is None:
+    if other is None:
         print(f'{run.source}: "{text}"')
         for row in np.argsort(-sims[0], kind="stable")[: args.top]:
             print(f"  {sims[0, row]:.3f}  {describe(nodes[int(objects[row])])}")
-    else:
+    elif args.nearest is not None:
         anchor = nodes[int(objects[sims[1].argmax()])]
-        rows = of_type([nodes[int(o)].label for o in objects], text, sims[0], args.top)
-        print(f'{run.source}: "{text}" nearest to "{args.near}", {sims[1].max():.3f}  {describe(anchor)}')
+        rows = of_type(labels, text, sims[0], args.top)
+        print(f'{run.source}: "{text}" nearest to "{args.nearest}", {sims[1].max():.3f}  {describe(anchor)}')
         for node_id, gap, centre in graph_edges.nearest(nodes, anchor.id, [int(objects[r]) for r in rows])[: args.top]:
             print(f"  {gap:.2f} m apart, {centre:.2f} m between centres  {describe(nodes[node_id])}")
+    else:
+        rel = "near" if args.near is not None else "on"
+        anchors = np.flatnonzero(np.array(labels) == other.strip().lower())
+        subject = f'"{text}"' if text else "objects"
+        print(f'{run.source}: {subject} {rel} "{other}"')
+        for row in anchors:
+            print(f"  anchor {sims[-1, row]:.3f}  {describe(nodes[int(objects[row])])}")
+        found = graph_edges.related(edges, [int(objects[r]) for r in anchors], rel)
+        row_of = {int(o): r for r, o in enumerate(objects)}
+        if text and text.strip().lower() in labels:
+            found = [f for f in found if nodes[f[0]].label == text.strip().lower()]
+        elif text:  # not a label: the neighbours that best match the text by SigLIP
+            found = sorted(found, key=lambda f: -sims[0, row_of[f[0]]])[: args.top]
+        for node_id, seen_from, anchor, gap in found:
+            score = f"{sims[0, row_of[node_id]]:.3f}  " if text else ""
+            print(f"  {score}{seen_from} {anchor}, {gap:.2f} m apart  {describe(nodes[node_id])}")
+        if not found:
+            can = graph_edges.gets_edges(nodes)
+            why = (
+                ""
+                if any(can[int(objects[r])] for r in anchors)
+                else f": walls, floors, ceilings and boxes with a side over {graph_edges.MAX_SIDE:g} m get no edges"
+            )
+            print(f"  none{why}")

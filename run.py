@@ -234,5 +234,5 @@ if results:
     if not args.skip_text_eval:
         print("\nText queries (OpenLex3D level 0 and level 1)")
         print(metrics.table(results, metrics.QUERY_COLUMNS))
-    print("\nNearest object of a type (graph.query --near), against the GT boxes")
+    print("\nNearest object of a type (graph.query --nearest), against the GT boxes")
     print(metrics.table(results, metrics.NEAR_COLUMNS))

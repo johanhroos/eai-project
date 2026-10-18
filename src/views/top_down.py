@@ -3,7 +3,7 @@
 Each node is drawn as its box seen from above, in the colour views/video.py gives it and labelled with its label and
 ID. "on" edges are arrows from the node on top to the one under it, "near" edges thin dashed lines between the box
 centres. Nodes without edges (walls, floors, ceilings and nodes with a box side over edges.MAX_SIDE) are left out, as
-in rerun_map. highlight draws chosen nodes thicker and dims the rest, such as the answer of a --near query. On Replica,
+in rerun_map. highlight draws chosen nodes thicker and dims the rest, such as the answer of a --nearest query. On Replica,
 gt=True also draws the GT objects' boxes (ground_truth.boxes_in_run) as dashed outlines, to compare the boxes with.
 
 In a notebook:      top_down.plot(run)
