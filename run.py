@@ -16,12 +16,13 @@ import json
 import os
 from dataclasses import replace
 
-# Lets PyTorch reuse reserved but free GPU memory for large blocks: SAM 3's tracker ran out of a 10 GB GPU on phone
-# video with 2.7 GB reserved and unused. Set before torch is imported.
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
-
 import numpy as np
 import torch
+
+# Reduce fragmentation on NVIDIA GPUs. On ROCm, expandable segments corrupted SAM's detections and VGGT's poses
+# on the phone run; keep its default allocator. Set before the first GPU allocation (importing torch is safe).
+if torch.version.hip is None:
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 from data import cli, footage, replica, vocab
 from data.stages import (
@@ -120,6 +121,11 @@ def compute_masks(run: Run) -> None:
             "score_threshold_detection": model.config.score_threshold_detection,
             "new_det_thresh": model.config.new_det_thresh,
         }
+    if not len(masks.frame):
+        raise RuntimeError(
+            f"{run.source}: no object masks were detected. Check the prompts and model inference before continuing; "
+            "no masks cache was saved. On ROCm, disable expandable_segments if it is enabled in your environment."
+        )
     save_stage(run.stage_dir("masks"), masks, metadata)
     print(f"Saved {len(masks.frame)} masks to {run.stage_dir('masks')}")
 
@@ -143,6 +149,8 @@ for run in runs:
     if stale(run, "masks", {"vocab": prompts(run)} if run.mask_source == "sam3" else None):
         compute_masks(run)
     masks = load_stage(run.stage_dir("masks"), Masks)
+    if not len(masks.frame):
+        raise SystemExit(f"{source}: the cached masks are empty; rerun with --overwrite masks")
 
     if stale(run, "features"):
         save_stage(run.stage_dir("features"), dino.features(run, masks, dino.load_encoder()), {"model": dino.MODEL_ID})

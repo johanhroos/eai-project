@@ -23,6 +23,19 @@ torch. Three models are gated: request access to [facebook/sam3](https://hugging
 [facebook/dinov3-vitl16-pretrain-lvd1689m](https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m) and
 [facebook/VGGT-Omega](https://huggingface.co/facebook/VGGT-Omega) before logging in.
 
+On AMD, use a ROCm build of PyTorch in the environment instead of the NVIDIA CUDA extras above. The pipeline keeps
+ROCm's default allocator: enabling `expandable_segments` caused zero SAM detections and invalid VGGT camera poses on
+a tested 16 GB gfx1100 GPU. Leave that option disabled in your environment. On ROCm GPUs with at most 16 GiB of VRAM,
+SAM automatically keeps tracking state in RAM, detects one prompt at a time, and encodes object memories 16 at a time
+to avoid running out of GPU memory. Mask matching also avoids constructing every pair's pixel intersection at once.
+To run the included phone clip, using only the discrete GPU and sampling 50 frames:
+
+```bash
+ROCR_VISIBLE_DEVICES=0 .venv/bin/python run.py --source phone/IMG_0649 --stride 20
+```
+
+If an earlier run saved zero masks, add `--overwrite masks` once; dependent stages will also be rebuilt.
+
 **Data.** `bash scripts/download_data.sh` downloads the 8 Replica scenes that OpenLex3D labels (about 46 GB) into
 `data/vmap/` (frames, depth, poses and object masks, from vMAP) and `data/gt_openlex3d/` (OpenLex3D's labels and text
 queries). Phone videos go in `data/phone/`.

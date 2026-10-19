@@ -1,0 +1,15 @@
+# Copy the video without overwriting an existing file
+cp -n "/path/to/new_video.MOV" data/phone/room_2.MOV
+
+# Run the pipeline (source name excludes the extension)
+ROCR_VISIBLE_DEVICES=0 .venv/bin/python run.py \
+  --source phone/room_2 --stride 20
+
+# Export the 3D visualization
+.venv/bin/python -m views.rerun_map \
+  --source phone/room_2 --stride 20
+
+# Open it in Rerun
+.venv/bin/rerun outputs/phone/room_2/stride20/sam3_vggt/eval/map.rrd
+
+

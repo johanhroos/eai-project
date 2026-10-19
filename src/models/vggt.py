@@ -81,6 +81,12 @@ def reconstruct(run: Run, model: VGGTOmega) -> Geometry:
     paths = [str(footage.image_path(run, int(i))) for i in frames]
     images = load_and_preprocess_images(paths, mode=MODE, image_resolution=RESOLUTION).to("cuda")
     predictions = model(images)
+    for name in ("pose_enc", "depth", "depth_conf"):
+        if not torch.isfinite(predictions[name]).all():
+            raise RuntimeError(
+                f"VGGT-Omega returned non-finite {name}. Check the GPU runtime and precision settings; "
+                "on ROCm, disable expandable_segments if it is enabled in your environment."
+            )
     h, w = images.shape[-2:]
     height, width = footage.image_size(run)
     cam_from_world, intrinsics = encoding_to_camera(predictions["pose_enc"], (h, w))
@@ -148,6 +154,8 @@ def wall_angle(views) -> tuple[float, float]:
 
 def gravity_up(cam_from_world: np.ndarray) -> np.ndarray:
     """Unit up direction in the model's world frame, from the cameras' axes (see the module docstring)."""
+    if not np.isfinite(cam_from_world).all():
+        raise ValueError("Cannot estimate gravity from non-finite camera poses; check VGGT-Omega's predictions")
     x_axes, y_axes = cam_from_world[:, 0, :3], cam_from_world[:, 1, :3]  # right and down in the image
     _, singular, vt = np.linalg.svd(x_axes)
     up = -y_axes.mean(0)
